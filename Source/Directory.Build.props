@@ -1,0 +1,19 @@
+<Project>
+    <!-- Customize builds -->
+    <PropertyGroup>
+        <ForceImportAfterCppDefaultProps>$(MsbuildThisFileDirectory)\Directory.Build.AfterCppDefault.props</ForceImportAfterCppDefaultProps>
+    </PropertyGroup>
+    <ItemDefinitionGroup>
+        <ClCompile>
+            <WarningLevel>Level3</WarningLevel>
+            <LanguageStandard>stdcpp20</LanguageStandard>
+            <LanguageStandard_C>stdc17</LanguageStandard_C>
+            <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+        </ClCompile>
+    </ItemDefinitionGroup>
+    <!-- Import outer Directory.Build.props if exists -->
+    <PropertyGroup>
+        <OuterDirectoryBuildPropsPath>$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))</OuterDirectoryBuildPropsPath>
+    </PropertyGroup>
+    <Import Project="$(OuterDirectoryBuildPropsPath)" Condition="'$(OuterDirectoryBuildPropsPath)' != ''"/>
+</Project>
