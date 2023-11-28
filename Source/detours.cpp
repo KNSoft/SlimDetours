@@ -541,342 +541,6 @@ inline ULONG detour_is_code_filler(PBYTE pbCode)
 
 #endif // DETOURS_X64
 
-//////////////////////////////////////////////////////////////////////// IA64.
-//
-#ifdef DETOURS_IA64
-
-struct _DETOUR_TRAMPOLINE
-{
-    // On the IA64, a trampoline is used for both incoming and outgoing calls.
-    //
-    // The trampoline contains the following bundles for the outgoing call:
-    //      movl gp=target_gp;
-    //      <relocated target bundle>
-    //      brl  target_code;
-    //
-    // The trampoline contains the following bundles for the incoming call:
-    //      alloc  r41=ar.pfs, b, 0, 8, 0
-    //      mov    r40=rp
-    //
-    //      adds   r50=0, r39
-    //      adds   r49=0, r38
-    //      adds   r48=0, r37 ;;
-    //
-    //      adds   r47=0, r36
-    //      adds   r46=0, r35
-    //      adds   r45=0, r34
-    //
-    //      adds   r44=0, r33
-    //      adds   r43=0, r32
-    //      adds   r42=0, gp ;;
-    //
-    //      movl   gp=ffffffff`ffffffff ;;
-    //
-    //      brl.call.sptk.few rp=disas!TestCodes+20e0 (00000000`00404ea0) ;;
-    //
-    //      adds   gp=0, r42
-    //      mov    rp=r40, +0 ;;
-    //      mov.i  ar.pfs=r41
-    //
-    //      br.ret.sptk.many rp ;;
-    //
-    // This way, we only have to relocate a single bundle.
-    //
-    // The complicated incoming trampoline is required because we have to
-    // create an additional stack frame so that we save and restore the gp.
-    // We must do this because gp is a caller-saved register, but not saved
-    // if the caller thinks the target is in the same DLL, which changes
-    // when we insert a detour.
-    //
-    DETOUR_IA64_BUNDLE  bMovlTargetGp;  // Bundle which sets target GP
-    BYTE                rbCode[sizeof(DETOUR_IA64_BUNDLE)]; // moved bundle.
-    DETOUR_IA64_BUNDLE  bBrlRemainEip;  // Brl to pbRemain
-    // This must be adjacent to bBranchIslands.
-
-    // Each instruction in the moved bundle could be a IP-relative chk or branch or call.
-    // Any such instructions are changed to point to a brl in bBranchIslands.
-    // This must be adjacent to bBrlRemainEip -- see "pbPool".
-    DETOUR_IA64_BUNDLE bBranchIslands[DETOUR_IA64_INSTRUCTIONS_PER_BUNDLE];
-
-    // Target of brl inserted in target function
-    DETOUR_IA64_BUNDLE  bAllocFrame;    // alloc frame
-    DETOUR_IA64_BUNDLE  bSave37to39;    // save r37, r38, r39.
-    DETOUR_IA64_BUNDLE  bSave34to36;    // save r34, r35, r36.
-    DETOUR_IA64_BUNDLE  bSaveGPto33;    // save gp, r32, r33.
-    DETOUR_IA64_BUNDLE  bMovlDetourGp;  // set detour GP.
-    DETOUR_IA64_BUNDLE  bCallDetour;    // call detour.
-    DETOUR_IA64_BUNDLE  bPopFrameGp;    // pop frame and restore gp.
-    DETOUR_IA64_BUNDLE  bReturn;        // return to caller.
-
-    PLABEL_DESCRIPTOR   pldTrampoline;
-
-    BYTE                rbRestore[sizeof(DETOUR_IA64_BUNDLE)]; // original target bundle.
-    BYTE                cbRestore;      // size of original target code.
-    BYTE                cbCode;         // size of moved target code.
-    _DETOUR_ALIGN       rAlign[14];     // instruction alignment array.
-    PBYTE               pbRemain;       // first instruction after moved code. [free list]
-    PBYTE               pbDetour;       // first instruction of detour function.
-    PPLABEL_DESCRIPTOR  ppldDetour;     // [pbDetour,gpDetour]
-    PPLABEL_DESCRIPTOR  ppldTarget;     // [pbTarget,gpDetour]
-};
-
-C_ASSERT(sizeof(DETOUR_IA64_BUNDLE) == 16);
-C_ASSERT(sizeof(_DETOUR_TRAMPOLINE) == 256 + DETOUR_IA64_INSTRUCTIONS_PER_BUNDLE * 16);
-
-enum {
-    SIZE_OF_JMP = sizeof(DETOUR_IA64_BUNDLE)
-};
-
-inline PBYTE detour_skip_jmp(PBYTE pPointer, PVOID *ppGlobals)
-{
-    PBYTE pGlobals = NULL;
-    PBYTE pbCode = NULL;
-
-    if (pPointer != NULL) {
-        PPLABEL_DESCRIPTOR ppld = (PPLABEL_DESCRIPTOR)pPointer;
-        pbCode = (PBYTE)ppld->EntryPoint;
-        pGlobals = (PBYTE)ppld->GlobalPointer;
-    }
-    if (ppGlobals != NULL) {
-        *ppGlobals = pGlobals;
-    }
-    if (pbCode == NULL) {
-        return NULL;
-    }
-
-    DETOUR_IA64_BUNDLE *pb = (DETOUR_IA64_BUNDLE *)pbCode;
-
-    // IA64 Local Import Jumps look like:
-    //      addl   r2=ffffffff`ffe021c0, gp ;;
-    //      ld8    r2=[r2]
-    //      nop.i  0 ;;
-    //
-    //      ld8    r3=[r2], 8 ;;
-    //      ld8    gp=[r2]
-    //      mov    b6=r3, +0
-    //
-    //      nop.m  0
-    //      nop.i  0
-    //      br.cond.sptk.few b6
-    //
-
-    //                     002024000200100b
-    if ((pb[0].wide[0] & 0xfffffc000603ffff) == 0x002024000200100b &&
-        pb[0].wide[1] == 0x0004000000203008 &&
-        pb[1].wide[0] == 0x001014180420180a &&
-        pb[1].wide[1] == 0x07000830c0203008 &&
-        pb[2].wide[0] == 0x0000000100000010 &&
-        pb[2].wide[1] == 0x0080006000000200) {
-
-        ULONG64 offset =
-            ((pb[0].wide[0] & 0x0000000001fc0000) >> 18) |  // imm7b
-            ((pb[0].wide[0] & 0x000001ff00000000) >> 25) |  // imm9d
-            ((pb[0].wide[0] & 0x00000000f8000000) >> 11);   // imm5c
-        if (pb[0].wide[0] & 0x0000020000000000) {           // sign
-            offset |= 0xffffffffffe00000;
-        }
-        PBYTE pbTarget = pGlobals + offset;
-        DETOUR_TRACE(("%p: potential import jump, target=%p\n", pb, pbTarget));
-
-        if (detour_is_imported(pbCode, pbTarget) && *(PBYTE*)pbTarget != NULL) {
-            DETOUR_TRACE(("%p: is import jump, label=%p\n", pb, *(PBYTE *)pbTarget));
-
-            PPLABEL_DESCRIPTOR ppld = (PPLABEL_DESCRIPTOR)*(PBYTE *)pbTarget;
-            pbCode = (PBYTE)ppld->EntryPoint;
-            pGlobals = (PBYTE)ppld->GlobalPointer;
-            if (ppGlobals != NULL) {
-                *ppGlobals = pGlobals;
-            }
-        }
-    }
-    return pbCode;
-}
-
-
-inline void detour_find_jmp_bounds(PBYTE pbCode,
-                                   PDETOUR_TRAMPOLINE *ppLower,
-                                   PDETOUR_TRAMPOLINE *ppUpper)
-{
-    (void)pbCode;
-    *ppLower = (PDETOUR_TRAMPOLINE)(ULONG_PTR)0x0000000000080000;
-    *ppUpper = (PDETOUR_TRAMPOLINE)(ULONG_PTR)0xfffffffffff80000;
-}
-
-inline BOOL detour_does_code_end_function(PBYTE pbCode)
-{
-    // Routine not needed on IA64.
-    (void)pbCode;
-    return FALSE;
-}
-
-inline ULONG detour_is_code_filler(PBYTE pbCode)
-{
-    // Routine not needed on IA64.
-    (void)pbCode;
-    return 0;
-}
-
-#endif // DETOURS_IA64
-
-#ifdef DETOURS_ARM
-
-struct _DETOUR_TRAMPOLINE
-{
-    // A Thumb-2 instruction can be 2 or 4 bytes long.
-    BYTE            rbCode[62];     // target code + jmp to pbRemain
-    BYTE            cbCode;         // size of moved target code.
-    BYTE            cbCodeBreak;    // padding to make debugging easier.
-    BYTE            rbRestore[22];  // original target code.
-    BYTE            cbRestore;      // size of original target code.
-    BYTE            cbRestoreBreak; // padding to make debugging easier.
-    _DETOUR_ALIGN   rAlign[8];      // instruction alignment array.
-    PBYTE           pbRemain;       // first instruction after moved code. [free list]
-    PBYTE           pbDetour;       // first instruction of detour function.
-};
-
-C_ASSERT(sizeof(_DETOUR_TRAMPOLINE) == 104);
-
-enum {
-    SIZE_OF_JMP = 8
-};
-
-inline PBYTE align4(PBYTE pValue)
-{
-    return (PBYTE)(((ULONG)pValue) & ~(ULONG)3u);
-}
-
-inline ULONG fetch_thumb_opcode(PBYTE pbCode)
-{
-    ULONG Opcode = *(UINT16 *)&pbCode[0];
-    if (Opcode >= 0xe800) {
-        Opcode = (Opcode << 16) | *(UINT16 *)&pbCode[2];
-    }
-    return Opcode;
-}
-
-inline void write_thumb_opcode(PBYTE &pbCode, ULONG Opcode)
-{
-    if (Opcode >= 0x10000) {
-        *((UINT16*&)pbCode)++ = Opcode >> 16;
-    }
-    *((UINT16*&)pbCode)++ = (UINT16)Opcode;
-}
-
-PBYTE detour_gen_jmp_immediate(PBYTE pbCode, PBYTE *ppPool, PBYTE pbJmpVal)
-{
-    PBYTE pbLiteral;
-    if (ppPool != NULL) {
-        *ppPool = *ppPool - 4;
-        pbLiteral = *ppPool;
-    }
-    else {
-        pbLiteral = align4(pbCode + 6);
-    }
-
-    *((PBYTE*&)pbLiteral) = DETOURS_PBYTE_TO_PFUNC(pbJmpVal);
-    LONG delta = pbLiteral - align4(pbCode + 4);
-
-    write_thumb_opcode(pbCode, 0xf8dff000 | delta);     // LDR PC,[PC+n]
-
-    if (ppPool == NULL) {
-        if (((ULONG)pbCode & 2) != 0) {
-            write_thumb_opcode(pbCode, 0xdefe);         // BREAK
-        }
-        pbCode += 4;
-    }
-    return pbCode;
-}
-
-inline PBYTE detour_gen_brk(PBYTE pbCode, PBYTE pbLimit)
-{
-    while (pbCode < pbLimit) {
-        write_thumb_opcode(pbCode, 0xdefe);
-    }
-    return pbCode;
-}
-
-inline PBYTE detour_skip_jmp(PBYTE pbCode, PVOID *ppGlobals)
-{
-    if (pbCode == NULL) {
-        return NULL;
-    }
-    if (ppGlobals != NULL) {
-        *ppGlobals = NULL;
-    }
-
-    // Skip over the import jump if there is one.
-    pbCode = (PBYTE)DETOURS_PFUNC_TO_PBYTE(pbCode);
-    ULONG Opcode = fetch_thumb_opcode(pbCode);
-
-    if ((Opcode & 0xfbf08f00) == 0xf2400c00) {          // movw r12,#xxxx
-        ULONG Opcode2 = fetch_thumb_opcode(pbCode+4);
-
-        if ((Opcode2 & 0xfbf08f00) == 0xf2c00c00) {      // movt r12,#xxxx
-            ULONG Opcode3 = fetch_thumb_opcode(pbCode+8);
-            if (Opcode3 == 0xf8dcf000) {                 // ldr  pc,[r12]
-                PBYTE pbTarget = (PBYTE)(((Opcode2 << 12) & 0xf7000000) |
-                                         ((Opcode2 <<  1) & 0x08000000) |
-                                         ((Opcode2 << 16) & 0x00ff0000) |
-                                         ((Opcode  >>  4) & 0x0000f700) |
-                                         ((Opcode  >> 15) & 0x00000800) |
-                                         ((Opcode  >>  0) & 0x000000ff));
-                if (detour_is_imported(pbCode, pbTarget)) {
-                    PBYTE pbNew = *(PBYTE *)pbTarget;
-                    pbNew = DETOURS_PFUNC_TO_PBYTE(pbNew);
-                    DETOUR_TRACE(("%p->%p: skipped over import table.\n", pbCode, pbNew));
-                    return pbNew;
-                }
-            }
-        }
-    }
-    return pbCode;
-}
-
-inline void detour_find_jmp_bounds(PBYTE pbCode,
-                                   PDETOUR_TRAMPOLINE *ppLower,
-                                   PDETOUR_TRAMPOLINE *ppUpper)
-{
-    // We have to place trampolines within +/- 2GB of code.
-    ULONG_PTR lo = detour_2gb_below((ULONG_PTR)pbCode);
-    ULONG_PTR hi = detour_2gb_above((ULONG_PTR)pbCode);
-    DETOUR_TRACE(("[%p..%p..%p]\n", (PVOID)lo, pbCode, (PVOID)hi));
-
-    *ppLower = (PDETOUR_TRAMPOLINE)lo;
-    *ppUpper = (PDETOUR_TRAMPOLINE)hi;
-}
-
-
-inline BOOL detour_does_code_end_function(PBYTE pbCode)
-{
-    ULONG Opcode = fetch_thumb_opcode(pbCode);
-    if ((Opcode & 0xffffff87) == 0x4700 ||          // bx <reg>
-        (Opcode & 0xf800d000) == 0xf0009000) {      // b <imm20>
-        return TRUE;
-    }
-    if ((Opcode & 0xffff8000) == 0xe8bd8000) {      // pop {...,pc}
-        __debugbreak();
-        return TRUE;
-    }
-    if ((Opcode & 0xffffff00) == 0x0000bd00) {      // pop {...,pc}
-        __debugbreak();
-        return TRUE;
-    }
-    return FALSE;
-}
-
-inline ULONG detour_is_code_filler(PBYTE pbCode)
-{
-    if (pbCode[0] == 0x00 && pbCode[1] == 0xbf) { // nop.
-        return 2;
-    }
-    if (pbCode[0] == 0x00 && pbCode[1] == 0x00) { // zero-filled padding.
-        return 2;
-    }
-    return 0;
-}
-
-#endif // DETOURS_ARM
-
 #ifdef DETOURS_ARM64
 
 struct _DETOUR_TRAMPOLINE
@@ -1376,31 +1040,6 @@ static PVOID detour_alloc_trampoline_allocate_new(PBYTE pbTarget,
     return pbTry;
 }
 
-PVOID WINAPI DetourAllocateRegionWithinJumpBounds(_In_ LPCVOID pbTarget,
-                                                  _Out_ PDWORD pcbAllocatedSize)
-{
-    PDETOUR_TRAMPOLINE pLo;
-    PDETOUR_TRAMPOLINE pHi;
-    detour_find_jmp_bounds((PBYTE)pbTarget, &pLo, &pHi);
-
-    PVOID pbNewlyAllocated =
-        detour_alloc_trampoline_allocate_new((PBYTE)pbTarget, pLo, pHi);
-    if (pbNewlyAllocated == NULL) {
-        DETOUR_TRACE(("Couldn't find available memory region!\n"));
-        *pcbAllocatedSize = 0;
-        return NULL;
-    }
-
-    *pcbAllocatedSize = DETOUR_REGION_SIZE;
-    return pbNewlyAllocated;
-}
-
-BOOL WINAPI DetourIsFunctionImported(_In_ PBYTE pbCode,
-                                     _In_ PBYTE pbAddress)
-{
-    return detour_is_imported(pbCode, pbAddress);
-}
-
 static PDETOUR_TRAMPOLINE detour_alloc_trampoline(PBYTE pbTarget)
 {
     // We have to place trampolines within +/- 2GB of target.
@@ -1562,34 +1201,6 @@ PVOID WINAPI DetourCodeFromPointer(_In_ PVOID pPointer,
 
 //////////////////////////////////////////////////////////// Transaction APIs.
 //
-BOOL WINAPI DetourSetIgnoreTooSmall(_In_ BOOL fIgnore)
-{
-    BOOL fPrevious = s_fIgnoreTooSmall;
-    s_fIgnoreTooSmall = fIgnore;
-    return fPrevious;
-}
-
-BOOL WINAPI DetourSetRetainRegions(_In_ BOOL fRetain)
-{
-    BOOL fPrevious = s_fRetainRegions;
-    s_fRetainRegions = fRetain;
-    return fPrevious;
-}
-
-PVOID WINAPI DetourSetSystemRegionLowerBound(_In_ PVOID pSystemRegionLowerBound)
-{
-    PVOID pPrevious = s_pSystemRegionLowerBound;
-    s_pSystemRegionLowerBound = pSystemRegionLowerBound;
-    return pPrevious;
-}
-
-PVOID WINAPI DetourSetSystemRegionUpperBound(_In_ PVOID pSystemRegionUpperBound)
-{
-    PVOID pPrevious = s_pSystemRegionUpperBound;
-    s_pSystemRegionUpperBound = pSystemRegionUpperBound;
-    return pPrevious;
-}
-
 LONG WINAPI DetourTransactionBegin()
 {
     // Only one transaction is allowed at a time.
@@ -1711,10 +1322,6 @@ LONG WINAPI DetourTransactionCommitEx(_Out_opt_ PVOID **pppFailedPointer)
             CopyMemory(o->pbTarget,
                        o->pTrampoline->rbRestore,
                        o->pTrampoline->cbRestore);
-#ifdef DETOURS_IA64
-            *o->ppbPointer = (PBYTE)o->pTrampoline->ppldTarget;
-#endif // DETOURS_IA64
-
 #ifdef DETOURS_X86
             *o->ppbPointer = o->pbTarget;
 #endif // DETOURS_X86
@@ -1723,13 +1330,9 @@ LONG WINAPI DetourTransactionCommitEx(_Out_opt_ PVOID **pppFailedPointer)
             *o->ppbPointer = o->pbTarget;
 #endif // DETOURS_X64
 
-#ifdef DETOURS_ARM
-            *o->ppbPointer = DETOURS_PBYTE_TO_PFUNC(o->pbTarget);
-#endif // DETOURS_ARM
-
 #ifdef DETOURS_ARM64
             *o->ppbPointer = o->pbTarget;
-#endif // DETOURS_ARM
+#endif // DETOURS_ARM64
         }
         else {
             DETOUR_TRACE(("detours: pbTramp =%p, pbRemain=%p, pbDetour=%p, cbRestore=%u\n",
@@ -1747,12 +1350,6 @@ LONG WINAPI DetourTransactionCommitEx(_Out_opt_ PVOID **pppFailedPointer)
                           o->pbTarget[4], o->pbTarget[5], o->pbTarget[6], o->pbTarget[7],
                           o->pbTarget[8], o->pbTarget[9], o->pbTarget[10], o->pbTarget[11]));
 
-#ifdef DETOURS_IA64
-            ((DETOUR_IA64_BUNDLE*)o->pbTarget)
-                ->SetBrl((UINT64)&o->pTrampoline->bAllocFrame);
-            *o->ppbPointer = (PBYTE)&o->pTrampoline->pldTrampoline;
-#endif // DETOURS_IA64
-
 #ifdef DETOURS_X64
             detour_gen_jmp_indirect(o->pTrampoline->rbCodeIn, &o->pTrampoline->pbDetour);
             PBYTE pbCode = detour_gen_jmp_immediate(o->pbTarget, o->pTrampoline->rbCodeIn);
@@ -1767,13 +1364,6 @@ LONG WINAPI DetourTransactionCommitEx(_Out_opt_ PVOID **pppFailedPointer)
             *o->ppbPointer = o->pTrampoline->rbCode;
             UNREFERENCED_PARAMETER(pbCode);
 #endif // DETOURS_X86
-
-#ifdef DETOURS_ARM
-            PBYTE pbCode = detour_gen_jmp_immediate(o->pbTarget, NULL, o->pTrampoline->pbDetour);
-            pbCode = detour_gen_brk(pbCode, o->pTrampoline->pbRemain);
-            *o->ppbPointer = DETOURS_PBYTE_TO_PFUNC(o->pTrampoline->rbCode);
-            UNREFERENCED_PARAMETER(pbCode);
-#endif // DETOURS_ARM
 
 #ifdef DETOURS_ARM64
             PBYTE pbCode = detour_gen_jmp_indirect(o->pbTarget, (ULONG64*)&(o->pTrampoline->pbDetour));
@@ -1802,38 +1392,6 @@ LONG WINAPI DetourTransactionCommitEx(_Out_opt_ PVOID **pppFailedPointer)
                           o->pTrampoline->rbCode[6], o->pTrampoline->rbCode[7],
                           o->pTrampoline->rbCode[8], o->pTrampoline->rbCode[9],
                           o->pTrampoline->rbCode[10], o->pTrampoline->rbCode[11]));
-
-#ifdef DETOURS_IA64
-            DETOUR_TRACE(("\n"));
-            DETOUR_TRACE(("detours:  &pldTrampoline  =%p\n",
-                          &o->pTrampoline->pldTrampoline));
-            DETOUR_TRACE(("detours:  &bMovlTargetGp  =%p [%p]\n",
-                          &o->pTrampoline->bMovlTargetGp,
-                          o->pTrampoline->bMovlTargetGp.GetMovlGp()));
-            DETOUR_TRACE(("detours:  &rbCode         =%p [%p]\n",
-                          &o->pTrampoline->rbCode,
-                          ((DETOUR_IA64_BUNDLE&)o->pTrampoline->rbCode).GetBrlTarget()));
-            DETOUR_TRACE(("detours:  &bBrlRemainEip  =%p [%p]\n",
-                          &o->pTrampoline->bBrlRemainEip,
-                          o->pTrampoline->bBrlRemainEip.GetBrlTarget()));
-            DETOUR_TRACE(("detours:  &bMovlDetourGp  =%p [%p]\n",
-                          &o->pTrampoline->bMovlDetourGp,
-                          o->pTrampoline->bMovlDetourGp.GetMovlGp()));
-            DETOUR_TRACE(("detours:  &bBrlDetourEip  =%p [%p]\n",
-                          &o->pTrampoline->bCallDetour,
-                          o->pTrampoline->bCallDetour.GetBrlTarget()));
-            DETOUR_TRACE(("detours:  pldDetour       =%p [%p]\n",
-                          o->pTrampoline->ppldDetour->EntryPoint,
-                          o->pTrampoline->ppldDetour->GlobalPointer));
-            DETOUR_TRACE(("detours:  pldTarget       =%p [%p]\n",
-                          o->pTrampoline->ppldTarget->EntryPoint,
-                          o->pTrampoline->ppldTarget->GlobalPointer));
-            DETOUR_TRACE(("detours:  pbRemain        =%p\n",
-                          o->pTrampoline->pbRemain));
-            DETOUR_TRACE(("detours:  pbDetour        =%p\n",
-                          o->pTrampoline->pbDetour));
-            DETOUR_TRACE(("\n"));
-#endif // DETOURS_IA64
         }
     }
 
@@ -1851,14 +1409,6 @@ LONG WINAPI DetourTransactionCommitEx(_Out_opt_ PVOID **pppFailedPointer)
 #ifdef DETOURS_X64
 #define DETOURS_EIP         Rip
 #endif // DETOURS_X64
-
-#ifdef DETOURS_IA64
-#define DETOURS_EIP         StIIP
-#endif // DETOURS_IA64
-
-#ifdef DETOURS_ARM
-#define DETOURS_EIP         Pc
-#endif // DETOURS_ARM
 
 #ifdef DETOURS_ARM64
 #define DETOURS_EIP         Pc
@@ -2051,22 +1601,8 @@ LONG WINAPI DetourAttachEx(_Inout_ PVOID *ppPointer,
     PDETOUR_TRAMPOLINE pTrampoline = NULL;
     DetourOperation *o = NULL;
 
-#ifdef DETOURS_IA64
-    PPLABEL_DESCRIPTOR ppldDetour = (PPLABEL_DESCRIPTOR)pDetour;
-    PPLABEL_DESCRIPTOR ppldTarget = (PPLABEL_DESCRIPTOR)pbTarget;
-    PVOID pDetourGlobals = NULL;
-    PVOID pTargetGlobals = NULL;
-
-    pDetour = (PBYTE)DetourCodeFromPointer(ppldDetour, &pDetourGlobals);
-    pbTarget = (PBYTE)DetourCodeFromPointer(ppldTarget, &pTargetGlobals);
-    DETOUR_TRACE(("  ppldDetour=%p, code=%p [gp=%p]\n",
-                  ppldDetour, pDetour, pDetourGlobals));
-    DETOUR_TRACE(("  ppldTarget=%p, code=%p [gp=%p]\n",
-                  ppldTarget, pbTarget, pTargetGlobals));
-#else // DETOURS_IA64
     pbTarget = (PBYTE)DetourCodeFromPointer(pbTarget, NULL);
     pDetour = DetourCodeFromPointer(pDetour, NULL);
-#endif // !DETOURS_IA64
 
     // Don't follow a jump if its destination is the target function.
     // This happens when the detour does nothing other than call the target.
@@ -2133,44 +1669,10 @@ LONG WINAPI DetourAttachEx(_Inout_ PVOID *ppPointer,
     // Determine the number of movable target instructions.
     PBYTE pbSrc = pbTarget;
     PBYTE pbTrampoline = pTrampoline->rbCode;
-#ifdef DETOURS_IA64
-    PBYTE pbPool = (PBYTE)(&pTrampoline->bBranchIslands + 1);
-#else
     PBYTE pbPool = pbTrampoline + sizeof(pTrampoline->rbCode);
-#endif
     ULONG cbTarget = 0;
     ULONG cbJump = SIZE_OF_JMP;
     ULONG nAlign = 0;
-
-#ifdef DETOURS_ARM
-    // On ARM, we need an extra instruction when the function isn't 32-bit aligned.
-    // Check if the existing code is another detour (or at least a similar
-    // "ldr pc, [PC+0]" jump.
-    if ((ULONG)pbTarget & 2) {
-        cbJump += 2;
-
-        ULONG op = fetch_thumb_opcode(pbSrc);
-        if (op == 0xbf00) {
-            op = fetch_thumb_opcode(pbSrc + 2);
-            if (op == 0xf8dff000) { // LDR PC,[PC]
-                *((PUSHORT&)pbTrampoline)++ = *((PUSHORT&)pbSrc)++;
-                *((PULONG&)pbTrampoline)++ = *((PULONG&)pbSrc)++;
-                *((PULONG&)pbTrampoline)++ = *((PULONG&)pbSrc)++;
-                cbTarget = (LONG)(pbSrc - pbTarget);
-                // We will fall through the "while" because cbTarget is now >= cbJump.
-            }
-        }
-    }
-    else {
-        ULONG op = fetch_thumb_opcode(pbSrc);
-        if (op == 0xf8dff000) { // LDR PC,[PC]
-            *((PULONG&)pbTrampoline)++ = *((PULONG&)pbSrc)++;
-            *((PULONG&)pbTrampoline)++ = *((PULONG&)pbSrc)++;
-            cbTarget = (LONG)(pbSrc - pbTarget);
-            // We will fall through the "while" because cbTarget is now >= cbJump.
-        }
-    }
-#endif
 
     while (cbTarget < cbJump) {
         PBYTE pbOp = pbSrc;
@@ -2248,57 +1750,15 @@ LONG WINAPI DetourAttachEx(_Inout_ PVOID *ppPointer,
     pTrampoline->cbRestore = (BYTE)cbTarget;
     CopyMemory(pTrampoline->rbRestore, pbTarget, cbTarget);
 
-#if !defined(DETOURS_IA64)
     if (cbTarget > sizeof(pTrampoline->rbCode) - cbJump) {
         // Too many instructions.
         error = ERROR_INVALID_HANDLE;
         DETOUR_BREAK();
         goto fail;
     }
-#endif // !DETOURS_IA64
 
     pTrampoline->pbRemain = pbTarget + cbTarget;
     pTrampoline->pbDetour = (PBYTE)pDetour;
-
-#ifdef DETOURS_IA64
-    pTrampoline->ppldDetour = ppldDetour;
-    pTrampoline->ppldTarget = ppldTarget;
-    pTrampoline->pldTrampoline.EntryPoint = (UINT64)&pTrampoline->bMovlTargetGp;
-    pTrampoline->pldTrampoline.GlobalPointer = (UINT64)pDetourGlobals;
-
-    ((DETOUR_IA64_BUNDLE *)pTrampoline->rbCode)->SetStop();
-
-    pTrampoline->bMovlTargetGp.SetMovlGp((UINT64)pTargetGlobals);
-    pTrampoline->bBrlRemainEip.SetBrl((UINT64)pTrampoline->pbRemain);
-
-    // Alloc frame:      alloc r41=ar.pfs,11,0,8,0; mov r40=rp
-    pTrampoline->bAllocFrame.wide[0] = 0x00000580164d480c;
-    pTrampoline->bAllocFrame.wide[1] = 0x00c4000500000200;
-    // save r36, r37, r38.
-    pTrampoline->bSave37to39.wide[0] = 0x031021004e019001;
-    pTrampoline->bSave37to39.wide[1] = 0x8401280600420098;
-    // save r34,r35,r36: adds r47=0,r36; adds r46=0,r35; adds r45=0,r34
-    pTrampoline->bSave34to36.wide[0] = 0x02e0210048017800;
-    pTrampoline->bSave34to36.wide[1] = 0x84011005a042008c;
-    // save gp,r32,r33"  adds r44=0,r33; adds r43=0,r32; adds r42=0,gp ;;
-    pTrampoline->bSaveGPto33.wide[0] = 0x02b0210042016001;
-    pTrampoline->bSaveGPto33.wide[1] = 0x8400080540420080;
-    // set detour GP.
-    pTrampoline->bMovlDetourGp.SetMovlGp((UINT64)pDetourGlobals);
-    // call detour:      brl.call.sptk.few rp=detour ;;
-    pTrampoline->bCallDetour.wide[0] = 0x0000000100000005;
-    pTrampoline->bCallDetour.wide[1] = 0xd000001000000000;
-    pTrampoline->bCallDetour.SetBrlTarget((UINT64)pDetour);
-    // pop frame & gp:   adds gp=0,r42; mov rp=r40,+0;; mov.i ar.pfs=r41
-    pTrampoline->bPopFrameGp.wide[0] = 0x4000210054000802;
-    pTrampoline->bPopFrameGp.wide[1] = 0x00aa029000038005;
-    // return to caller: br.ret.sptk.many rp ;;
-    pTrampoline->bReturn.wide[0] = 0x0000000100000019;
-    pTrampoline->bReturn.wide[1] = 0x0084000880000200;
-
-    DETOUR_TRACE(("detours: &bMovlTargetGp=%p\n", &pTrampoline->bMovlTargetGp));
-    DETOUR_TRACE(("detours: &bMovlDetourGp=%p\n", &pTrampoline->bMovlDetourGp));
-#endif // DETOURS_IA64
 
     pbTrampoline = pTrampoline->rbCode + pTrampoline->cbCode;
 #ifdef DETOURS_X64
@@ -2310,11 +1770,6 @@ LONG WINAPI DetourAttachEx(_Inout_ PVOID *ppPointer,
     pbTrampoline = detour_gen_jmp_immediate(pbTrampoline, pTrampoline->pbRemain);
     pbTrampoline = detour_gen_brk(pbTrampoline, pbPool);
 #endif // DETOURS_X86
-
-#ifdef DETOURS_ARM
-    pbTrampoline = detour_gen_jmp_immediate(pbTrampoline, &pbPool, pTrampoline->pbRemain);
-    pbTrampoline = detour_gen_brk(pbTrampoline, pbPool);
-#endif // DETOURS_ARM
 
 #ifdef DETOURS_ARM64
     pbTrampoline = detour_gen_jmp_immediate(pbTrampoline, &pbPool, pTrampoline->pbRemain);
@@ -2404,56 +1859,9 @@ LONG WINAPI DetourDetach(_Inout_ PVOID *ppPointer,
         return error;
     }
 
-
-#ifdef DETOURS_IA64
-    PPLABEL_DESCRIPTOR ppldTrampo = (PPLABEL_DESCRIPTOR)*ppPointer;
-    PPLABEL_DESCRIPTOR ppldDetour = (PPLABEL_DESCRIPTOR)pDetour;
-    PVOID pDetourGlobals = NULL;
-    PVOID pTrampoGlobals = NULL;
-
-    pDetour = (PBYTE)DetourCodeFromPointer(ppldDetour, &pDetourGlobals);
-    PDETOUR_TRAMPOLINE pTrampoline = (PDETOUR_TRAMPOLINE)
-        DetourCodeFromPointer(ppldTrampo, &pTrampoGlobals);
-    DETOUR_TRACE(("  ppldDetour=%p, code=%p [gp=%p]\n",
-                  ppldDetour, pDetour, pDetourGlobals));
-    DETOUR_TRACE(("  ppldTrampo=%p, code=%p [gp=%p]\n",
-                  ppldTrampo, pTrampoline, pTrampoGlobals));
-
-
-    DETOUR_TRACE(("\n"));
-    DETOUR_TRACE(("detours:  &pldTrampoline  =%p\n",
-                  &pTrampoline->pldTrampoline));
-    DETOUR_TRACE(("detours:  &bMovlTargetGp  =%p [%p]\n",
-                  &pTrampoline->bMovlTargetGp,
-                  pTrampoline->bMovlTargetGp.GetMovlGp()));
-    DETOUR_TRACE(("detours:  &rbCode         =%p [%p]\n",
-                  &pTrampoline->rbCode,
-                  ((DETOUR_IA64_BUNDLE&)pTrampoline->rbCode).GetBrlTarget()));
-    DETOUR_TRACE(("detours:  &bBrlRemainEip  =%p [%p]\n",
-                  &pTrampoline->bBrlRemainEip,
-                  pTrampoline->bBrlRemainEip.GetBrlTarget()));
-    DETOUR_TRACE(("detours:  &bMovlDetourGp  =%p [%p]\n",
-                  &pTrampoline->bMovlDetourGp,
-                  pTrampoline->bMovlDetourGp.GetMovlGp()));
-    DETOUR_TRACE(("detours:  &bBrlDetourEip  =%p [%p]\n",
-                  &pTrampoline->bCallDetour,
-                  pTrampoline->bCallDetour.GetBrlTarget()));
-    DETOUR_TRACE(("detours:  pldDetour       =%p [%p]\n",
-                  pTrampoline->ppldDetour->EntryPoint,
-                  pTrampoline->ppldDetour->GlobalPointer));
-    DETOUR_TRACE(("detours:  pldTarget       =%p [%p]\n",
-                  pTrampoline->ppldTarget->EntryPoint,
-                  pTrampoline->ppldTarget->GlobalPointer));
-    DETOUR_TRACE(("detours:  pbRemain        =%p\n",
-                  pTrampoline->pbRemain));
-    DETOUR_TRACE(("detours:  pbDetour        =%p\n",
-                  pTrampoline->pbDetour));
-    DETOUR_TRACE(("\n"));
-#else // !DETOURS_IA64
     PDETOUR_TRAMPOLINE pTrampoline =
         (PDETOUR_TRAMPOLINE)DetourCodeFromPointer(*ppPointer, NULL);
     pDetour = DetourCodeFromPointer(pDetour, NULL);
-#endif // !DETOURS_IA64
 
     ////////////////////////////////////// Verify that Trampoline is in place.
     //
@@ -2498,107 +1906,6 @@ LONG WINAPI DetourDetach(_Inout_ PVOID *ppPointer,
     s_pPendingOperations = o;
 
     return NO_ERROR;
-}
-
-//////////////////////////////////////////////////////////////////////////////
-//
-// Helpers for manipulating page protection.
-//
-
-// For reference:
-//   PAGE_NOACCESS          0x01
-//   PAGE_READONLY          0x02
-//   PAGE_READWRITE         0x04
-//   PAGE_WRITECOPY         0x08
-//   PAGE_EXECUTE           0x10
-//   PAGE_EXECUTE_READ      0x20
-//   PAGE_EXECUTE_READWRITE 0x40
-//   PAGE_EXECUTE_WRITECOPY 0x80
-//   PAGE_GUARD             ...
-//   PAGE_NOCACHE           ...
-//   PAGE_WRITECOMBINE      ...
-
-#define DETOUR_PAGE_EXECUTE_ALL    (PAGE_EXECUTE |              \
-                                    PAGE_EXECUTE_READ |         \
-                                    PAGE_EXECUTE_READWRITE |    \
-                                    PAGE_EXECUTE_WRITECOPY)
-
-#define DETOUR_PAGE_NO_EXECUTE_ALL (PAGE_NOACCESS |             \
-                                    PAGE_READONLY |             \
-                                    PAGE_READWRITE |            \
-                                    PAGE_WRITECOPY)
-
-#define DETOUR_PAGE_ATTRIBUTES     (~(DETOUR_PAGE_EXECUTE_ALL | DETOUR_PAGE_NO_EXECUTE_ALL))
-
-C_ASSERT((DETOUR_PAGE_NO_EXECUTE_ALL << 4) == DETOUR_PAGE_EXECUTE_ALL);
-
-static DWORD DetourPageProtectAdjustExecute(_In_  DWORD dwOldProtect,
-                                            _In_  DWORD dwNewProtect)
-//  Copy EXECUTE from dwOldProtect to dwNewProtect.
-{
-    bool const fOldExecute = ((dwOldProtect & DETOUR_PAGE_EXECUTE_ALL) != 0);
-    bool const fNewExecute = ((dwNewProtect & DETOUR_PAGE_EXECUTE_ALL) != 0);
-
-    if (fOldExecute && !fNewExecute) {
-        dwNewProtect = ((dwNewProtect & DETOUR_PAGE_NO_EXECUTE_ALL) << 4)
-            | (dwNewProtect & DETOUR_PAGE_ATTRIBUTES);
-    }
-    else if (!fOldExecute && fNewExecute) {
-        dwNewProtect = ((dwNewProtect & DETOUR_PAGE_EXECUTE_ALL) >> 4)
-            | (dwNewProtect & DETOUR_PAGE_ATTRIBUTES);
-    }
-    return dwNewProtect;
-}
-
-_Success_(return != FALSE)
-BOOL WINAPI DetourVirtualProtectSameExecuteEx(_In_  HANDLE hProcess,
-                                              _In_  PVOID pAddress,
-                                              _In_  SIZE_T nSize,
-                                              _In_  DWORD dwNewProtect,
-                                              _Out_ PDWORD pdwOldProtect)
-// Some systems do not allow executability of a page to change. This function applies
-// dwNewProtect to [pAddress, nSize), but preserving the previous executability.
-// This function is meant to be a drop-in replacement for some uses of VirtualProtectEx.
-// When "restoring" page protection, there is no need to use this function.
-{
-    MEMORY_BASIC_INFORMATION mbi;
-
-    // Query to get existing execute access.
-
-    ZeroMemory(&mbi, sizeof(mbi));
-
-    if (VirtualQueryEx(hProcess, pAddress, &mbi, sizeof(mbi)) == 0) {
-        return FALSE;
-    }
-    return VirtualProtectEx(hProcess, pAddress, nSize,
-                            DetourPageProtectAdjustExecute(mbi.Protect, dwNewProtect),
-                            pdwOldProtect);
-}
-
-_Success_(return != FALSE)
-BOOL WINAPI DetourVirtualProtectSameExecute(_In_  PVOID pAddress,
-                                            _In_  SIZE_T nSize,
-                                            _In_  DWORD dwNewProtect,
-                                            _Out_ PDWORD pdwOldProtect)
-{
-    return DetourVirtualProtectSameExecuteEx(GetCurrentProcess(),
-                                             pAddress, nSize, dwNewProtect, pdwOldProtect);
-}
-
-BOOL WINAPI DetourAreSameGuid(_In_ REFGUID left, _In_ REFGUID right)
-{
-    return
-        left.Data1 == right.Data1 &&
-        left.Data2 == right.Data2 &&
-        left.Data3 == right.Data3 &&
-        left.Data4[0] == right.Data4[0] &&
-        left.Data4[1] == right.Data4[1] &&
-        left.Data4[2] == right.Data4[2] &&
-        left.Data4[3] == right.Data4[3] &&
-        left.Data4[4] == right.Data4[4] &&
-        left.Data4[5] == right.Data4[5] &&
-        left.Data4[6] == right.Data4[6] &&
-        left.Data4[7] == right.Data4[7];
 }
 
 //  End of File

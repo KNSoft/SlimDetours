@@ -27,21 +27,11 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="creatwth.cpp" />
     <ClCompile Include="detours.cpp" />
     <ClCompile Include="disasm.cpp" />
-    <ClCompile Include="disolarm.cpp" />
-    <ClCompile Include="disolarm64.cpp" />
-    <ClCompile Include="disolia64.cpp" />
-    <ClCompile Include="disolx64.cpp" />
-    <ClCompile Include="disolx86.cpp" />
-    <ClCompile Include="image.cpp" />
-    <ClCompile Include="modules.cpp" />
-    <None Include="uimports.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="detours.h" />
-    <ClInclude Include="detver.h" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
@@ -185,7 +175,6 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <LinkTimeCodeGeneration>UseFastLinkTimeCodeGeneration</LinkTimeCodeGeneration>
     </Link>
   </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
