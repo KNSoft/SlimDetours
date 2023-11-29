@@ -3,8 +3,14 @@
   <ItemGroup>
     <ClCompile Include="detours.cpp" />
     <ClCompile Include="disasm.cpp" />
+    <ClCompile Include="pch.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="detours.h" />
+    <ClInclude Include="pch.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="packages.config" />
+    <None Include="..\.editorconfig" />
   </ItemGroup>
 </Project>

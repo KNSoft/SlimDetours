@@ -1,20 +1,17 @@
-//////////////////////////////////////////////////////////////////////////////
-//
-//  Detours Disassembler (disasm.cpp of detours.lib)
-//
-//  Microsoft Research Detours Package, Version 4.0.1
-//
-//  Copyright (c) Microsoft Corporation.  All rights reserved.
-//
+﻿/*
+ * KNSoft SlimDetours (https://github.com/KNSoft/SlimDetours) Disassembler
+ * Copyright (c) KNSoft.org (https://github.com/KNSoft). All rights reserved.
+ * Licensed under the MPL-2.0 license.
+ *
+ * Source base on Microsoft Detours:
+ *
+ * Microsoft Research Detours Package, Version 4.0.1
+ * Copyright (c) Microsoft Corporation. All rights reserved.
+ * Licensed under the MIT license.
+ */
 
-// #define DETOUR_DEBUG 1
-#define DETOURS_INTERNAL
+#include "pch.h"
 #include "detours.h"
-#include <limits.h>
-
-#if DETOURS_VERSION != 0x4c0c1   // 0xMAJORcMINORcPATCH
-#error detours.h version mismatch
-#endif
 
 #undef ASSERT
 #define ASSERT(x)
@@ -83,55 +80,56 @@
 //
 //  Includes full support for all x86 chips prior to the Pentium III, and some newer stuff.
 //
-#if defined(DETOURS_X64) || defined(DETOURS_X86)
+#if defined(_M_X64) || defined(_M_IX86)
 
 class CDetourDis
 {
-  public:
-    CDetourDis(_Out_opt_ PBYTE *ppbTarget,
-               _Out_opt_ LONG *plExtra);
+public:
+    CDetourDis(_Out_opt_ PBYTE* ppbTarget, _Out_opt_ LONG* plExtra);
 
-    PBYTE   CopyInstruction(PBYTE pbDst, PBYTE pbSrc);
+    PBYTE CopyInstruction(PBYTE pbDst, PBYTE pbSrc);
     static BOOL SanityCheckSystem();
     static BOOL SetCodeModule(PBYTE pbBeg, PBYTE pbEnd, BOOL fLimitReferencesToModule);
 
-  public:
+public:
     struct COPYENTRY;
-    typedef const COPYENTRY * REFCOPYENTRY;
+    typedef const COPYENTRY* REFCOPYENTRY;
 
-    typedef PBYTE (CDetourDis::* COPYFUNC)(REFCOPYENTRY pEntry, PBYTE pbDst, PBYTE pbSrc);
+    typedef PBYTE(CDetourDis::*COPYFUNC)(REFCOPYENTRY pEntry, PBYTE pbDst, PBYTE pbSrc);
 
     // nFlagBits flags.
-    enum {
-        DYNAMIC     = 0x1u,
-        ADDRESS     = 0x2u,
-        NOENLARGE   = 0x4u,
-        RAX         = 0x8u,
+    enum
+    {
+        DYNAMIC = 0x1u,
+        ADDRESS = 0x2u,
+        NOENLARGE = 0x4u,
+        RAX = 0x8u,
     };
 
     // ModR/M Flags
-    enum {
-        SIB         = 0x10u,
-        RIP         = 0x20u,
-        NOTSIB      = 0x0fu,
+    enum
+    {
+        SIB = 0x10u,
+        RIP = 0x20u,
+        NOTSIB = 0x0fu,
     };
 
     struct COPYENTRY
     {
         // Many of these fields are often ignored. See ENTRY_DataIgnored.
-        ULONG       nFixedSize      : 4;    // Fixed size of opcode
-        ULONG       nFixedSize16    : 4;    // Fixed size when 16 bit operand
-        ULONG       nModOffset      : 4;    // Offset to mod/rm byte (0=none)
-        ULONG       nRelOffset      : 4;    // Offset to relative target.
-        ULONG       nFlagBits       : 4;    // Flags for DYNAMIC, etc.
-        COPYFUNC    pfCopy;                 // Function pointer.
+        ULONG       nFixedSize : 4;     // Fixed size of opcode
+        ULONG       nFixedSize16 : 4;   // Fixed size when 16 bit operand
+        ULONG       nModOffset : 4;     // Offset to mod/rm byte (0=none)
+        ULONG       nRelOffset : 4;     // Offset to relative target.
+        ULONG       nFlagBits : 4;      // Flags for DYNAMIC, etc.
+        COPYFUNC    pfCopy;             // Function pointer.
     };
 
-  protected:
+protected:
 // These macros define common uses of nFixedSize, nFixedSize16, nModOffset, nRelOffset, nFlagBits, pfCopy.
 #define ENTRY_DataIgnored           0, 0, 0, 0, 0,
 #define ENTRY_CopyBytes1            { 1, 1, 0, 0, 0, &CDetourDis::CopyBytes }
-#ifdef DETOURS_X64
+#if defined(_M_X64)
 #define ENTRY_CopyBytes1Address     { 9, 5, 0, 0, ADDRESS, &CDetourDis::CopyBytes }
 #else
 #define ENTRY_CopyBytes1Address     { 5, 3, 0, 0, ADDRESS, &CDetourDis::CopyBytes }
@@ -144,8 +142,8 @@ class CDetourDis
 #define ENTRY_CopyBytes3            { 3, 3, 0, 0, 0, &CDetourDis::CopyBytes }
 #define ENTRY_CopyBytes3Dynamic     { 3, 3, 0, 0, DYNAMIC, &CDetourDis::CopyBytes }
 #define ENTRY_CopyBytes3Or5         { 5, 3, 0, 0, 0, &CDetourDis::CopyBytes }
-#define ENTRY_CopyBytes3Or5Dynamic  { 5, 3, 0, 0, DYNAMIC, &CDetourDis::CopyBytes }// x86 only
-#ifdef DETOURS_X64
+#define ENTRY_CopyBytes3Or5Dynamic  { 5, 3, 0, 0, DYNAMIC, &CDetourDis::CopyBytes } // x86 only
+#if defined(_M_X64)
 #define ENTRY_CopyBytes3Or5Rax      { 5, 3, 0, 0, RAX, &CDetourDis::CopyBytes }
 #define ENTRY_CopyBytes3Or5Target   { 5, 5, 0, 1, 0, &CDetourDis::CopyBytes }
 #else
@@ -179,7 +177,7 @@ class CDetourDis
 #define ENTRY_CopyVex2              { ENTRY_DataIgnored &CDetourDis::CopyVex2 }
 #define ENTRY_CopyVex3              { ENTRY_DataIgnored &CDetourDis::CopyVex3 }
 #define ENTRY_CopyEvex              { ENTRY_DataIgnored &CDetourDis::CopyEvex } // 62, 3 byte payload, then normal with implied prefixes like vex
-#define ENTRY_CopyXop               { ENTRY_DataIgnored &CDetourDis::CopyXop }   // 0x8F ... POP /0 or AMD XOP
+#define ENTRY_CopyXop               { ENTRY_DataIgnored &CDetourDis::CopyXop } // 0x8F ... POP /0 or AMD XOP
 #define ENTRY_CopyBytesXop          { 5, 5, 4, 0, 0, &CDetourDis::CopyBytes } // 0x8F xop1 xop2 opcode modrm
 #define ENTRY_CopyBytesXop1         { 6, 6, 4, 0, 0, &CDetourDis::CopyBytes } // 0x8F xop1 xop2 opcode modrm ... imm8
 #define ENTRY_CopyBytesXop4         { 9, 9, 4, 0, 0, &CDetourDis::CopyBytes } // 0x8F xop1 xop2 opcode modrm ... imm32
@@ -196,7 +194,7 @@ class CDetourDis
     PBYTE AdjustTarget(PBYTE pbDst, PBYTE pbSrc, UINT cbOp,
                        UINT cbTargetOffset, UINT cbTargetSize);
 
-  protected:
+protected:
     PBYTE Copy0F(REFCOPYENTRY pEntry, PBYTE pbDst, PBYTE pbSrc);
     PBYTE Copy0F00(REFCOPYENTRY pEntry, PBYTE pbDst, PBYTE pbSrc); // x86 only sldt/0 str/1 lldt/2 ltr/3 err/4 verw/5 jmpe/6/dynamic invalid/7
     PBYTE Copy0F78(REFCOPYENTRY pEntry, PBYTE pbDst, PBYTE pbSrc); // vmread, 66/extrq/ib/ib, F2/insertq/ib/ib
@@ -215,7 +213,7 @@ class CDetourDis
     PBYTE CopyEvex(REFCOPYENTRY pEntry, PBYTE pbDst, PBYTE pbSrc);
     PBYTE CopyXop(REFCOPYENTRY pEntry, PBYTE pbDst, PBYTE pbSrc);
 
-  protected:
+protected:
     static const COPYENTRY  s_rceCopyTable[];
     static const COPYENTRY  s_rceCopyTable0F[];
     static const BYTE       s_rbModRm[256];
@@ -223,29 +221,30 @@ class CDetourDis
     static PBYTE            s_pbModuleEnd;
     static BOOL             s_fLimitReferencesToModule;
 
-  protected:
-    BOOL                m_bOperandOverride;
-    BOOL                m_bAddressOverride;
-    BOOL                m_bRaxOverride; // AMD64 only
-    BOOL                m_bVex;
-    BOOL                m_bEvex;
-    BOOL                m_bF2;
-    BOOL                m_bF3; // x86 only
-    BYTE                m_nSegmentOverride;
+protected:
+    BOOL    m_bOperandOverride;
+    BOOL    m_bAddressOverride;
+    BOOL    m_bRaxOverride; // AMD64 only
+    BOOL    m_bVex;
+    BOOL    m_bEvex;
+    BOOL    m_bF2;
+    BOOL    m_bF3; // x86 only
+    BYTE    m_nSegmentOverride;
 
-    PBYTE *             m_ppbTarget;
-    LONG *              m_plExtra;
+    PBYTE*  m_ppbTarget;
+    LONG*   m_plExtra;
 
-    LONG                m_lScratchExtra;
-    PBYTE               m_pbScratchTarget;
-    BYTE                m_rbScratchDst[64]; // matches or exceeds rbCode
+    LONG    m_lScratchExtra;
+    PBYTE   m_pbScratchTarget;
+    BYTE    m_rbScratchDst[64]; // matches or exceeds rbCode
 };
 
-PVOID WINAPI DetourCopyInstruction(_In_opt_ PVOID pDst,
-                                   _Inout_opt_ PVOID *ppDstPool,
-                                   _In_ PVOID pSrc,
-                                   _Out_opt_ PVOID *ppTarget,
-                                   _Out_opt_ LONG *plExtra)
+PVOID WINAPI DetourCopyInstruction(
+    _In_opt_ PVOID pDst,
+    _Inout_opt_ PVOID* ppDstPool,
+    _In_ PVOID pSrc,
+    _Out_opt_ PVOID* ppTarget,
+    _Out_opt_ LONG* plExtra)
 {
     UNREFERENCED_PARAMETER(ppDstPool);  // x86 & x64 don't use a constant pool.
 
@@ -255,7 +254,7 @@ PVOID WINAPI DetourCopyInstruction(_In_opt_ PVOID pDst,
 
 /////////////////////////////////////////////////////////// Disassembler Code.
 //
-CDetourDis::CDetourDis(_Out_opt_ PBYTE *ppbTarget, _Out_opt_ LONG *plExtra) :
+CDetourDis::CDetourDis(_Out_opt_ PBYTE* ppbTarget, _Out_opt_ LONG* plExtra) :
     m_bOperandOverride(FALSE),
     m_bAddressOverride(FALSE),
     m_bRaxOverride(FALSE),
@@ -274,10 +273,12 @@ CDetourDis::CDetourDis(_Out_opt_ PBYTE *ppbTarget, _Out_opt_ LONG *plExtra) :
 PBYTE CDetourDis::CopyInstruction(PBYTE pbDst, PBYTE pbSrc)
 {
     // Configure scratch areas if real areas are not available.
-    if (NULL == pbDst) {
+    if (NULL == pbDst)
+    {
         pbDst = m_rbScratchDst;
     }
-    if (NULL == pbSrc) {
+    if (NULL == pbSrc)
+    {
         // We can't copy a non-existent instruction.
         SetLastError(ERROR_INVALID_DATA);
         return NULL;
@@ -305,47 +306,55 @@ PBYTE CDetourDis::CopyBytes(REFCOPYENTRY pEntry, PBYTE pbDst, PBYTE pbSrc)
     UINT const nFixedSize = pEntry->nFixedSize;
     UINT const nFixedSize16 = pEntry->nFixedSize16;
 
-    if (nFlagBits & ADDRESS) {
+    if (nFlagBits & ADDRESS)
+    {
         nBytesFixed = m_bAddressOverride ? nFixedSize16 : nFixedSize;
     }
-#ifdef DETOURS_X64
+#if defined(_M_X64)
     // REX.W trumps 66
-    else if (m_bRaxOverride) {
+    else if (m_bRaxOverride)
+    {
         nBytesFixed = nFixedSize + ((nFlagBits & RAX) ? 4 : 0);
     }
 #endif
-    else {
+    else
+    {
         nBytesFixed = m_bOperandOverride ? nFixedSize16 : nFixedSize;
     }
 
     UINT nBytes = nBytesFixed;
     UINT nRelOffset = pEntry->nRelOffset;
     UINT cbTarget = nBytes - nRelOffset;
-    if (nModOffset > 0) {
+    if (nModOffset > 0)
+    {
         ASSERT(nRelOffset == 0);
         BYTE const bModRm = pbSrc[nModOffset];
         BYTE const bFlags = s_rbModRm[bModRm];
 
         nBytes += bFlags & NOTSIB;
 
-        if (bFlags & SIB) {
+        if (bFlags & SIB)
+        {
             BYTE const bSib = pbSrc[nModOffset + 1];
 
-            if ((bSib & 0x07) == 0x05) {
-                if ((bModRm & 0xc0) == 0x00) {
+            if ((bSib & 0x07) == 0x05)
+            {
+                if ((bModRm & 0xc0) == 0x00)
+                {
                     nBytes += 4;
-                }
-                else if ((bModRm & 0xc0) == 0x40) {
+                } else if ((bModRm & 0xc0) == 0x40)
+                {
                     nBytes += 1;
-                }
-                else if ((bModRm & 0xc0) == 0x80) {
+                } else if ((bModRm & 0xc0) == 0x80)
+                {
                     nBytes += 4;
                 }
             }
             cbTarget = nBytes - nRelOffset;
         }
-#ifdef DETOURS_X64
-        else if (bFlags & RIP) {
+#if defined(_M_X64)
+        else if (bFlags & RIP)
+        {
             nRelOffset = nModOffset + 1;
             cbTarget = 4;
         }
@@ -353,19 +362,23 @@ PBYTE CDetourDis::CopyBytes(REFCOPYENTRY pEntry, PBYTE pbDst, PBYTE pbSrc)
     }
     CopyMemory(pbDst, pbSrc, nBytes);
 
-    if (nRelOffset) {
+    if (nRelOffset)
+    {
         *m_ppbTarget = AdjustTarget(pbDst, pbSrc, nBytes, nRelOffset, cbTarget);
-#ifdef DETOURS_X64
-        if (pEntry->nRelOffset == 0) {
+#if defined(_M_X64)
+        if (pEntry->nRelOffset == 0)
+        {
             // This is a data target, not a code target, so we shouldn't return it.
             *m_ppbTarget = NULL;
         }
 #endif
     }
-    if (nFlagBits & NOENLARGE) {
+    if (nFlagBits & NOENLARGE)
+    {
         *m_plExtra = -*m_plExtra;
     }
-    if (nFlagBits & DYNAMIC) {
+    if (nFlagBits & DYNAMIC)
+    {
         *m_ppbTarget = (PBYTE)DETOUR_INSTRUCTION_TARGET_DYNAMIC;
     }
     return pbSrc + nBytes;
@@ -385,8 +398,10 @@ PBYTE CDetourDis::CopyBytesSegment(REFCOPYENTRY, PBYTE pbDst, PBYTE pbSrc)
 }
 
 PBYTE CDetourDis::CopyBytesRax(REFCOPYENTRY, PBYTE pbDst, PBYTE pbSrc)
-{ // AMD64 only
-    if (pbSrc[0] & 0x8) {
+{
+    // AMD64 only
+    if (pbSrc[0] & 0x8)
+    {
         m_bRaxOverride = TRUE;
     }
     return CopyBytesPrefix(0, pbDst, pbSrc);
@@ -394,16 +409,17 @@ PBYTE CDetourDis::CopyBytesRax(REFCOPYENTRY, PBYTE pbDst, PBYTE pbSrc)
 
 PBYTE CDetourDis::CopyBytesJump(REFCOPYENTRY pEntry, PBYTE pbDst, PBYTE pbSrc)
 {
-    (void)pEntry;
+    UNREFERENCED_PARAMETER(pEntry);
 
     PVOID pvSrcAddr = &pbSrc[1];
     PVOID pvDstAddr = NULL;
-    LONG_PTR nOldOffset = (LONG_PTR)*(signed char*&)pvSrcAddr;
+    LONG_PTR nOldOffset = (LONG_PTR)(*(signed char*&)pvSrcAddr);
     LONG_PTR nNewOffset = 0;
 
     *m_ppbTarget = pbSrc + 2 + nOldOffset;
 
-    if (pbSrc[0] == 0xeb) {
+    if (pbSrc[0] == 0xeb)
+    {
         pbDst[0] = 0xe9;
         pvDstAddr = &pbDst[1];
         nNewOffset = nOldOffset - ((pbDst - pbSrc) + 3);
@@ -425,12 +441,10 @@ PBYTE CDetourDis::CopyBytesJump(REFCOPYENTRY pEntry, PBYTE pbDst, PBYTE pbSrc)
     return pbSrc + 2;
 }
 
-PBYTE CDetourDis::AdjustTarget(PBYTE pbDst, PBYTE pbSrc, UINT cbOp,
-                               UINT cbTargetOffset, UINT cbTargetSize)
+PBYTE CDetourDis::AdjustTarget(PBYTE pbDst, PBYTE pbSrc, UINT cbOp, UINT cbTargetOffset, UINT cbTargetSize)
 {
     PBYTE pbTarget = NULL;
-#if 1 // fault injection to test test code
-#if defined(DETOURS_X64)
+#if defined(_M_X64)
     typedef LONGLONG T;
 #else
     typedef LONG T;
@@ -439,76 +453,81 @@ PBYTE CDetourDis::AdjustTarget(PBYTE pbDst, PBYTE pbSrc, UINT cbOp,
     T nNewOffset;
     PVOID pvTargetAddr = &pbDst[cbTargetOffset];
 
-    switch (cbTargetSize) {
-      case 1:
-        nOldOffset = *(signed char*&)pvTargetAddr;
-        break;
-      case 2:
-        nOldOffset = *(UNALIGNED SHORT*&)pvTargetAddr;
-        break;
-      case 4:
-        nOldOffset = *(UNALIGNED LONG*&)pvTargetAddr;
-        break;
-#if defined(DETOURS_X64)
-      case 8:
-        nOldOffset = *(UNALIGNED LONGLONG*&)pvTargetAddr;
-        break;
+    switch (cbTargetSize)
+    {
+        case 1:
+            nOldOffset = *(signed char*&)pvTargetAddr;
+            break;
+        case 2:
+            nOldOffset = *(UNALIGNED SHORT*&)pvTargetAddr;
+            break;
+        case 4:
+            nOldOffset = *(UNALIGNED LONG*&)pvTargetAddr;
+            break;
+#if defined(_M_X64)
+        case 8:
+            nOldOffset = *(UNALIGNED LONGLONG*&)pvTargetAddr;
+            break;
 #endif
-      default:
-        ASSERT(!"cbTargetSize is invalid.");
-        nOldOffset = 0;
-        break;
+        default:
+            ASSERT(!"cbTargetSize is invalid.");
+            nOldOffset = 0;
+            break;
     }
 
     pbTarget = pbSrc + cbOp + nOldOffset;
     nNewOffset = nOldOffset - (T)(pbDst - pbSrc);
 
-    switch (cbTargetSize) {
-      case 1:
-        *(CHAR*&)pvTargetAddr = (CHAR)nNewOffset;
-        if (nNewOffset < SCHAR_MIN || nNewOffset > SCHAR_MAX) {
-            *m_plExtra = sizeof(ULONG) - 1;
-        }
-        break;
-      case 2:
-        *(UNALIGNED SHORT*&)pvTargetAddr = (SHORT)nNewOffset;
-        if (nNewOffset < SHRT_MIN || nNewOffset > SHRT_MAX) {
-            *m_plExtra = sizeof(ULONG) - 2;
-        }
-        break;
-      case 4:
-        *(UNALIGNED LONG*&)pvTargetAddr = (LONG)nNewOffset;
-        if (nNewOffset < LONG_MIN || nNewOffset > LONG_MAX) {
-            *m_plExtra = sizeof(ULONG) - 4;
-        }
-        break;
-#if defined(DETOURS_X64)
-      case 8:
-        *(UNALIGNED LONGLONG*&)pvTargetAddr = nNewOffset;
-        break;
+    switch (cbTargetSize)
+    {
+        case 1:
+            *(CHAR*&)pvTargetAddr = (CHAR)nNewOffset;
+            if (nNewOffset < SCHAR_MIN || nNewOffset > SCHAR_MAX)
+            {
+                *m_plExtra = sizeof(ULONG) - 1;
+            }
+            break;
+        case 2:
+            *(UNALIGNED SHORT*&)pvTargetAddr = (SHORT)nNewOffset;
+            if (nNewOffset < SHRT_MIN || nNewOffset > SHRT_MAX)
+            {
+                *m_plExtra = sizeof(ULONG) - 2;
+            }
+            break;
+        case 4:
+            *(UNALIGNED LONG*&)pvTargetAddr = (LONG)nNewOffset;
+            if (nNewOffset < LONG_MIN || nNewOffset > LONG_MAX)
+            {
+                *m_plExtra = sizeof(ULONG) - 4;
+            }
+            break;
+#if defined(_M_X64)
+        case 8:
+            *(UNALIGNED LONGLONG*&)pvTargetAddr = nNewOffset;
+            break;
 #endif
     }
-#ifdef DETOURS_X64
+#if defined(_M_X64)
     // When we are only computing size, source and dest can be
     // far apart, distance not encodable in 32bits. Ok.
     // At least still check the lower 32bits.
 
-    if (pbDst >= m_rbScratchDst && pbDst < (sizeof(m_rbScratchDst) + m_rbScratchDst)) {
+    if (pbDst >= m_rbScratchDst && pbDst < (sizeof(m_rbScratchDst) + m_rbScratchDst))
+    {
         ASSERT((((size_t)pbDst + cbOp + nNewOffset) & 0xFFFFFFFF) == (((size_t)pbTarget) & 0xFFFFFFFF));
-    }
-    else
+    } else
 #endif
     {
         ASSERT(pbDst + cbOp + nNewOffset == pbTarget);
     }
-#endif
     return pbTarget;
 }
 
 PBYTE CDetourDis::Invalid(REFCOPYENTRY pEntry, PBYTE pbDst, PBYTE pbSrc)
 {
-    (void)pbDst;
-    (void)pEntry;
+    UNREFERENCED_PARAMETER(pbDst);
+    UNREFERENCED_PARAMETER(pEntry);
+
     ASSERT(!"Invalid Instruction");
     return pbSrc + 1;
 }
@@ -548,7 +567,7 @@ PBYTE CDetourDis::Copy0F00(REFCOPYENTRY, PBYTE pbDst, PBYTE pbSrc)
     static const COPYENTRY other = /* B8 */ ENTRY_CopyBytes2Mod; // sldt/0 str/1 lldt/2 ltr/3 err/4 verw/5 jmpe/6 invalid/7
     static const COPYENTRY jmpe = /* B8 */ ENTRY_CopyBytes2ModDynamic; // jmpe/6 x86-on-IA64 syscalls
 
-    REFCOPYENTRY const pEntry = (((6 << 3) == ((7 << 3) & pbSrc[1])) ?  &jmpe : &other);
+    REFCOPYENTRY const pEntry = (((6 << 3) == ((7 << 3) & pbSrc[1])) ? &jmpe : &other);
     return (this->*pEntry->pfCopy)(pEntry, pbDst, pbSrc);
 }
 
@@ -563,13 +582,15 @@ PBYTE CDetourDis::Copy0FB8(REFCOPYENTRY, PBYTE pbDst, PBYTE pbSrc)
 }
 
 PBYTE CDetourDis::Copy66(REFCOPYENTRY pEntry, PBYTE pbDst, PBYTE pbSrc)
-{   // Operand-size override prefix
+{
+    // Operand-size override prefix
     m_bOperandOverride = TRUE;
     return CopyBytesPrefix(pEntry, pbDst, pbSrc);
 }
 
 PBYTE CDetourDis::Copy67(REFCOPYENTRY pEntry, PBYTE pbDst, PBYTE pbSrc)
-{   // Address size override prefix
+{
+    // Address size override prefix
     m_bAddressOverride = TRUE;
     return CopyBytesPrefix(pEntry, pbDst, pbSrc);
 }
@@ -581,17 +602,20 @@ PBYTE CDetourDis::CopyF2(REFCOPYENTRY pEntry, PBYTE pbDst, PBYTE pbSrc)
 }
 
 PBYTE CDetourDis::CopyF3(REFCOPYENTRY pEntry, PBYTE pbDst, PBYTE pbSrc)
-{ // x86 only
+{
+    // x86 only
     m_bF3 = TRUE;
     return CopyBytesPrefix(pEntry, pbDst, pbSrc);
 }
 
 PBYTE CDetourDis::CopyF6(REFCOPYENTRY pEntry, PBYTE pbDst, PBYTE pbSrc)
 {
-    (void)pEntry;
+    UNREFERENCED_PARAMETER(pEntry);
 
     // TEST BYTE /0
-    if (0x00 == (0x38 & pbSrc[1])) {    // reg(bits 543) of ModR/M == 0
+    if (0x00 == (0x38 & pbSrc[1]))
+    {
+        // reg(bits 543) of ModR/M == 0
         static const COPYENTRY ce = /* f6 */ ENTRY_CopyBytes2Mod1;
         return (this->*ce.pfCopy)(&ce, pbDst, pbSrc);
     }
@@ -608,10 +632,12 @@ PBYTE CDetourDis::CopyF6(REFCOPYENTRY pEntry, PBYTE pbDst, PBYTE pbSrc)
 
 PBYTE CDetourDis::CopyF7(REFCOPYENTRY pEntry, PBYTE pbDst, PBYTE pbSrc)
 {
-    (void)pEntry;
+    UNREFERENCED_PARAMETER(pEntry);
 
     // TEST WORD /0
-    if (0x00 == (0x38 & pbSrc[1])) {    // reg(bits 543) of ModR/M == 0
+    if (0x00 == (0x38 & pbSrc[1]))
+    {
+        // reg(bits 543) of ModR/M == 0
         static const COPYENTRY ce = /* f7 */ ENTRY_CopyBytes2ModOperand;
         return (this->*ce.pfCopy)(&ce, pbDst, pbSrc);
     }
@@ -627,7 +653,8 @@ PBYTE CDetourDis::CopyF7(REFCOPYENTRY pEntry, PBYTE pbDst, PBYTE pbSrc)
 }
 
 PBYTE CDetourDis::CopyFF(REFCOPYENTRY pEntry, PBYTE pbDst, PBYTE pbSrc)
-{   // INC /0
+{
+    // INC /0
     // DEC /1
     // CALL /2
     // CALL /3
@@ -635,43 +662,46 @@ PBYTE CDetourDis::CopyFF(REFCOPYENTRY pEntry, PBYTE pbDst, PBYTE pbSrc)
     // JMP /5
     // PUSH /6
     // invalid/7
-    (void)pEntry;
+    UNREFERENCED_PARAMETER(pEntry);
 
     static const COPYENTRY ce = /* ff */ ENTRY_CopyBytes2Mod;
     PBYTE pbOut = (this->*ce.pfCopy)(&ce, pbDst, pbSrc);
 
     BYTE const b1 = pbSrc[1];
 
-    if (0x15 == b1 || 0x25 == b1) {         // CALL [], JMP []
-#ifdef DETOURS_X64
+    if (0x15 == b1 || 0x25 == b1)
+    {
+        // CALL [], JMP []
+#if defined(_M_X64)
         // All segments but FS and GS are equivalent.
         if (m_nSegmentOverride != 0x64 && m_nSegmentOverride != 0x65)
 #else
         if (m_nSegmentOverride == 0 || m_nSegmentOverride == 0x2E)
 #endif
         {
-#ifdef DETOURS_X64
-            INT32 offset = *(UNALIGNED INT32*)&pbSrc[2];
-            PBYTE *ppbTarget = (PBYTE *)(pbSrc + 6 + offset);
+#if defined(_M_X64)
+            INT32 offset = *(UNALIGNED INT32*) & pbSrc[2];
+            PBYTE* ppbTarget = (PBYTE*)(pbSrc + 6 + offset);
 #else
-            PBYTE *ppbTarget = (PBYTE *)(SIZE_T)*(UNALIGNED ULONG*)&pbSrc[2];
+            PBYTE* ppbTarget = (PBYTE*)(SIZE_T) * (UNALIGNED ULONG*) & pbSrc[2];
 #endif
-            if (s_fLimitReferencesToModule &&
-                (ppbTarget < (PVOID)s_pbModuleBeg || ppbTarget >= (PVOID)s_pbModuleEnd)) {
+            if (s_fLimitReferencesToModule && (ppbTarget < (PVOID)s_pbModuleBeg || ppbTarget >= (PVOID)s_pbModuleEnd))
+            {
 
                 *m_ppbTarget = (PBYTE)DETOUR_INSTRUCTION_TARGET_DYNAMIC;
-            }
-            else {
+            } else
+            {
                 // This can access violate on random bytes. Use DetourSetCodeModule.
                 *m_ppbTarget = *ppbTarget;
             }
-        }
-        else {
+        } else
+        {
             *m_ppbTarget = (PBYTE)DETOUR_INSTRUCTION_TARGET_DYNAMIC;
         }
-    }
-    else if (0x10 == (0x30 & b1) || // CALL /2 or /3  --> reg(bits 543) of ModR/M == 010 or 011
-             0x20 == (0x30 & b1)) { // JMP /4 or /5 --> reg(bits 543) of ModR/M == 100 or 101
+    } else if (0x10 == (0x30 & b1) || // CALL /2 or /3  --> reg(bits 543) of ModR/M == 010 or 011
+               0x20 == (0x30 & b1))
+    {
+        // JMP /4 or /5 --> reg(bits 543) of ModR/M == 100 or 101
         *m_ppbTarget = (PBYTE)DETOUR_INSTRUCTION_TARGET_DYNAMIC;
     }
     return pbOut;
@@ -685,24 +715,26 @@ PBYTE CDetourDis::CopyVexEvexCommon(BYTE m, PBYTE pbDst, PBYTE pbSrc, BYTE p, BY
     static const COPYENTRY ceF3A = /* 3A */ ENTRY_CopyBytes2Mod1;
     static const COPYENTRY ceInvalid = /* C4 */ ENTRY_Invalid;
 
-    switch (p & 3) {
-    case 0: break;
-    case 1: m_bOperandOverride = TRUE; break;
-    case 2: m_bF3 = TRUE; break;
-    case 3: m_bF2 = TRUE; break;
+    switch (p & 3)
+    {
+        case 0: break;
+        case 1: m_bOperandOverride = TRUE; break;
+        case 2: m_bF3 = TRUE; break;
+        case 3: m_bF2 = TRUE; break;
     }
 
     REFCOPYENTRY pEntry;
 
     // see https://software.intel.com/content/www/us/en/develop/download/intel-avx512-fp16-architecture-specification.html
-    switch (m | fp16) {
-    default: return Invalid(&ceInvalid, pbDst, pbSrc);
-    case 1:  pEntry = &s_rceCopyTable0F[pbSrc[0]];
-             return (this->*pEntry->pfCopy)(pEntry, pbDst, pbSrc);
-    case 5:  // fallthrough
-    case 6:  // fallthrough
-    case 2:  return CopyBytes(&ceF38, pbDst, pbSrc);
-    case 3:  return CopyBytes(&ceF3A, pbDst, pbSrc);
+    switch (m | fp16)
+    {
+        default: return Invalid(&ceInvalid, pbDst, pbSrc);
+        case 1: pEntry = &s_rceCopyTable0F[pbSrc[0]];
+            return (this->*pEntry->pfCopy)(pEntry, pbDst, pbSrc);
+        case 5: // fallthrough
+        case 6: // fallthrough
+        case 2: return CopyBytes(&ceF38, pbDst, pbSrc);
+        case 3: return CopyBytes(&ceF3A, pbDst, pbSrc);
     }
 }
 
@@ -719,9 +751,10 @@ PBYTE CDetourDis::CopyVexCommon(BYTE m, PBYTE pbDst, PBYTE pbSrc)
 PBYTE CDetourDis::CopyVex3(REFCOPYENTRY, PBYTE pbDst, PBYTE pbSrc)
 // 3 byte VEX prefix 0xC4
 {
-#ifdef DETOURS_X86
+#if defined(_M_IX86)
     const static COPYENTRY ceLES = /* C4 */ ENTRY_CopyBytes2Mod;
-    if ((pbSrc[1] & 0xC0) != 0xC0) {
+    if ((pbSrc[1] & 0xC0) != 0xC0)
+    {
         REFCOPYENTRY pEntry = &ceLES;
         return (this->*pEntry->pfCopy)(pEntry, pbDst, pbSrc);
     }
@@ -729,7 +762,7 @@ PBYTE CDetourDis::CopyVex3(REFCOPYENTRY, PBYTE pbDst, PBYTE pbSrc)
     pbDst[0] = pbSrc[0];
     pbDst[1] = pbSrc[1];
     pbDst[2] = pbSrc[2];
-#ifdef DETOURS_X64
+#if defined(_M_X64)
     m_bRaxOverride |= !!(pbSrc[2] & 0x80); // w in last byte, see CopyBytesRax
 #else
     //
@@ -764,9 +797,10 @@ PBYTE CDetourDis::CopyVex3(REFCOPYENTRY, PBYTE pbDst, PBYTE pbSrc)
 PBYTE CDetourDis::CopyVex2(REFCOPYENTRY, PBYTE pbDst, PBYTE pbSrc)
 // 2 byte VEX prefix 0xC5
 {
-#ifdef DETOURS_X86
+#if defined(_M_IX86)
     const static COPYENTRY ceLDS = /* C5 */ ENTRY_CopyBytes2Mod;
-    if ((pbSrc[1] & 0xC0) != 0xC0) {
+    if ((pbSrc[1] & 0xC0) != 0xC0)
+    {
         REFCOPYENTRY pEntry = &ceLDS;
         return (this->*pEntry->pfCopy)(pEntry, pbDst, pbSrc);
     }
@@ -785,9 +819,10 @@ PBYTE CDetourDis::CopyEvex(REFCOPYENTRY, PBYTE pbDst, PBYTE pbSrc)
 
     BYTE const p0 = pbSrc[1];
 
-#ifdef DETOURS_X86
+#if defined(_M_IX86)
     const static COPYENTRY ceBound = /* 62 */ ENTRY_CopyBytes2Mod;
-    if ((p0 & 0xC0) != 0xC0) {
+    if ((p0 & 0xC0) != 0xC0)
+    {
         return CopyBytes(&ceBound, pbDst, pbSrc);
     }
 #endif
@@ -805,11 +840,11 @@ PBYTE CDetourDis::CopyEvex(REFCOPYENTRY, PBYTE pbDst, PBYTE pbSrc)
         return Invalid(&ceInvalid, pbDst, pbSrc);
 
     // Copy 4 byte prefix.
-    *(UNALIGNED ULONG *)pbDst = *(UNALIGNED ULONG*)pbSrc;
+    *(UNALIGNED ULONG*)pbDst = *(UNALIGNED ULONG*)pbSrc;
 
     m_bEvex = TRUE;
 
-#ifdef DETOURS_X64
+#if defined(_M_X64)
     m_bRaxOverride |= !!(p1 & 0x80); // w
 #endif
 
@@ -836,17 +871,17 @@ pp is like VEX but only instructions with 0 are defined
     ASSERT(m <= 10);
     switch (m)
     {
-    default:
-        return CopyBytes(&cePop, pbDst, pbSrc);
+        default:
+            return CopyBytes(&cePop, pbDst, pbSrc);
 
-    case 8: // modrm with 8bit immediate
-        return CopyBytes(&ceXop1, pbDst, pbSrc);
+        case 8: // modrm with 8bit immediate
+            return CopyBytes(&ceXop1, pbDst, pbSrc);
 
-    case 9: // modrm with no immediate
-        return CopyBytes(&ceXop, pbDst, pbSrc);
+        case 9: // modrm with no immediate
+            return CopyBytes(&ceXop, pbDst, pbSrc);
 
-    case 10: // modrm with 32bit immediate
-        return CopyBytes(&ceXop4, pbDst, pbSrc);
+        case 10: // modrm with 32bit immediate
+            return CopyBytes(&ceXop4, pbDst, pbSrc);
     }
 }
 
@@ -858,7 +893,8 @@ BOOL CDetourDis::s_fLimitReferencesToModule = FALSE;
 
 BOOL CDetourDis::SetCodeModule(PBYTE pbBeg, PBYTE pbEnd, BOOL fLimitReferencesToModule)
 {
-    if (pbEnd < pbBeg) {
+    if (pbEnd < pbBeg)
+    {
         return FALSE;
     }
 
@@ -872,22 +908,22 @@ BOOL CDetourDis::SetCodeModule(PBYTE pbBeg, PBYTE pbEnd, BOOL fLimitReferencesTo
 ///////////////////////////////////////////////////////// Disassembler Tables.
 //
 const BYTE CDetourDis::s_rbModRm[256] = {
-    0,0,0,0, SIB|1,RIP|4,0,0, 0,0,0,0, SIB|1,RIP|4,0,0, // 0x
-    0,0,0,0, SIB|1,RIP|4,0,0, 0,0,0,0, SIB|1,RIP|4,0,0, // 1x
-    0,0,0,0, SIB|1,RIP|4,0,0, 0,0,0,0, SIB|1,RIP|4,0,0, // 2x
-    0,0,0,0, SIB|1,RIP|4,0,0, 0,0,0,0, SIB|1,RIP|4,0,0, // 3x
-    1,1,1,1, 2,1,1,1, 1,1,1,1, 2,1,1,1,                 // 4x
-    1,1,1,1, 2,1,1,1, 1,1,1,1, 2,1,1,1,                 // 5x
-    1,1,1,1, 2,1,1,1, 1,1,1,1, 2,1,1,1,                 // 6x
-    1,1,1,1, 2,1,1,1, 1,1,1,1, 2,1,1,1,                 // 7x
-    4,4,4,4, 5,4,4,4, 4,4,4,4, 5,4,4,4,                 // 8x
-    4,4,4,4, 5,4,4,4, 4,4,4,4, 5,4,4,4,                 // 9x
-    4,4,4,4, 5,4,4,4, 4,4,4,4, 5,4,4,4,                 // Ax
-    4,4,4,4, 5,4,4,4, 4,4,4,4, 5,4,4,4,                 // Bx
-    0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,                 // Cx
-    0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,                 // Dx
-    0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,                 // Ex
-    0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0                  // Fx
+    0,0,0,0, SIB | 1,RIP | 4,0,0, 0,0,0,0, SIB | 1,RIP | 4,0,0, // 0x
+    0,0,0,0, SIB | 1,RIP | 4,0,0, 0,0,0,0, SIB | 1,RIP | 4,0,0, // 1x
+    0,0,0,0, SIB | 1,RIP | 4,0,0, 0,0,0,0, SIB | 1,RIP | 4,0,0, // 2x
+    0,0,0,0, SIB | 1,RIP | 4,0,0, 0,0,0,0, SIB | 1,RIP | 4,0,0, // 3x
+    1,1,1,1, 2,1,1,1, 1,1,1,1, 2,1,1,1,                         // 4x
+    1,1,1,1, 2,1,1,1, 1,1,1,1, 2,1,1,1,                         // 5x
+    1,1,1,1, 2,1,1,1, 1,1,1,1, 2,1,1,1,                         // 6x
+    1,1,1,1, 2,1,1,1, 1,1,1,1, 2,1,1,1,                         // 7x
+    4,4,4,4, 5,4,4,4, 4,4,4,4, 5,4,4,4,                         // 8x
+    4,4,4,4, 5,4,4,4, 4,4,4,4, 5,4,4,4,                         // 9x
+    4,4,4,4, 5,4,4,4, 4,4,4,4, 5,4,4,4,                         // Ax
+    4,4,4,4, 5,4,4,4, 4,4,4,4, 5,4,4,4,                         // Bx
+    0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,                         // Cx
+    0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,                         // Dx
+    0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,                         // Ex
+    0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0                          // Fx
 };
 
 const CDetourDis::COPYENTRY CDetourDis::s_rceCopyTable[] =
@@ -898,7 +934,7 @@ const CDetourDis::COPYENTRY CDetourDis::s_rceCopyTable[] =
     /* 03 */ ENTRY_CopyBytes2Mod,                      // ADD /r
     /* 04 */ ENTRY_CopyBytes2,                         // ADD ib
     /* 05 */ ENTRY_CopyBytes3Or5,                      // ADD iw
-#ifdef DETOURS_X64
+#if defined(_M_X64)
     /* 06 */ ENTRY_Invalid,                            // Invalid
     /* 07 */ ENTRY_Invalid,                            // Invalid
 #else
@@ -911,7 +947,7 @@ const CDetourDis::COPYENTRY CDetourDis::s_rceCopyTable[] =
     /* 0B */ ENTRY_CopyBytes2Mod,                      // OR /r
     /* 0C */ ENTRY_CopyBytes2,                         // OR ib
     /* 0D */ ENTRY_CopyBytes3Or5,                      // OR iw
-#ifdef DETOURS_X64
+#if defined(_M_X64)
     /* 0E */ ENTRY_Invalid,                            // Invalid
 #else
     /* 0E */ ENTRY_CopyBytes1,                         // PUSH
@@ -923,7 +959,7 @@ const CDetourDis::COPYENTRY CDetourDis::s_rceCopyTable[] =
     /* 13 */ ENTRY_CopyBytes2Mod,                      // ADC /r
     /* 14 */ ENTRY_CopyBytes2,                         // ADC ib
     /* 15 */ ENTRY_CopyBytes3Or5,                      // ADC id
-#ifdef DETOURS_X64
+#if defined(_M_X64)
     /* 16 */ ENTRY_Invalid,                            // Invalid
     /* 17 */ ENTRY_Invalid,                            // Invalid
 #else
@@ -936,7 +972,7 @@ const CDetourDis::COPYENTRY CDetourDis::s_rceCopyTable[] =
     /* 1B */ ENTRY_CopyBytes2Mod,                      // SBB /r
     /* 1C */ ENTRY_CopyBytes2,                         // SBB ib
     /* 1D */ ENTRY_CopyBytes3Or5,                      // SBB id
-#ifdef DETOURS_X64
+#if defined(_M_X64)
     /* 1E */ ENTRY_Invalid,                            // Invalid
     /* 1F */ ENTRY_Invalid,                            // Invalid
 #else
@@ -950,7 +986,7 @@ const CDetourDis::COPYENTRY CDetourDis::s_rceCopyTable[] =
     /* 24 */ ENTRY_CopyBytes2,                         // AND ib
     /* 25 */ ENTRY_CopyBytes3Or5,                      // AND id
     /* 26 */ ENTRY_CopyBytesSegment,                   // ES prefix
-#ifdef DETOURS_X64
+#if defined(_M_X64)
     /* 27 */ ENTRY_Invalid,                            // Invalid
 #else
     /* 27 */ ENTRY_CopyBytes1,                         // DAA
@@ -962,7 +998,7 @@ const CDetourDis::COPYENTRY CDetourDis::s_rceCopyTable[] =
     /* 2C */ ENTRY_CopyBytes2,                         // SUB ib
     /* 2D */ ENTRY_CopyBytes3Or5,                      // SUB id
     /* 2E */ ENTRY_CopyBytesSegment,                   // CS prefix
-#ifdef DETOURS_X64
+#if defined(_M_X64)
     /* 2F */ ENTRY_Invalid,                            // Invalid
 #else
     /* 2F */ ENTRY_CopyBytes1,                         // DAS
@@ -974,7 +1010,7 @@ const CDetourDis::COPYENTRY CDetourDis::s_rceCopyTable[] =
     /* 34 */ ENTRY_CopyBytes2,                         // XOR ib
     /* 35 */ ENTRY_CopyBytes3Or5,                      // XOR id
     /* 36 */ ENTRY_CopyBytesSegment,                   // SS prefix
-#ifdef DETOURS_X64
+#if defined(_M_X64)
     /* 37 */ ENTRY_Invalid,                            // Invalid
 #else
     /* 37 */ ENTRY_CopyBytes1,                         // AAA
@@ -986,12 +1022,12 @@ const CDetourDis::COPYENTRY CDetourDis::s_rceCopyTable[] =
     /* 3C */ ENTRY_CopyBytes2,                         // CMP ib
     /* 3D */ ENTRY_CopyBytes3Or5,                      // CMP id
     /* 3E */ ENTRY_CopyBytesSegment,                   // DS prefix
-#ifdef DETOURS_X64
+#if defined(_M_X64)
     /* 3F */ ENTRY_Invalid,                            // Invalid
 #else
     /* 3F */ ENTRY_CopyBytes1,                         // AAS
 #endif
-#ifdef DETOURS_X64 // For Rax Prefix
+#if defined(_M_X64) // For Rax Prefix
     /* 40 */ ENTRY_CopyBytesRax,                       // Rax
     /* 41 */ ENTRY_CopyBytesRax,                       // Rax
     /* 42 */ ENTRY_CopyBytesRax,                       // Rax
@@ -1042,7 +1078,7 @@ const CDetourDis::COPYENTRY CDetourDis::s_rceCopyTable[] =
     /* 5D */ ENTRY_CopyBytes1,                         // POP
     /* 5E */ ENTRY_CopyBytes1,                         // POP
     /* 5F */ ENTRY_CopyBytes1,                         // POP
-#ifdef DETOURS_X64
+#if defined(_M_X64)
     /* 60 */ ENTRY_Invalid,                            // Invalid
     /* 61 */ ENTRY_Invalid,                            // Invalid
     /* 62 */ ENTRY_CopyEvex,                           // EVEX / AVX512
@@ -1082,7 +1118,7 @@ const CDetourDis::COPYENTRY CDetourDis::s_rceCopyTable[] =
     /* 7F */ ENTRY_CopyBytes2Jump,                     // JG/JNLE      // 0f8f
     /* 80 */ ENTRY_CopyBytes2Mod1,                     // ADD/0 OR/1 ADC/2 SBB/3 AND/4 SUB/5 XOR/6 CMP/7 byte reg, immediate byte
     /* 81 */ ENTRY_CopyBytes2ModOperand,               // ADD/0 OR/1 ADC/2 SBB/3 AND/4 SUB/5 XOR/6 CMP/7 byte reg, immediate word or dword
-#ifdef DETOURS_X64
+#if defined(_M_X64)
     /* 82 */ ENTRY_Invalid,                            // Invalid
 #else
     /* 82 */ ENTRY_CopyBytes2Mod1,                     // MOV al,x
@@ -1110,7 +1146,7 @@ const CDetourDis::COPYENTRY CDetourDis::s_rceCopyTable[] =
     /* 97 */ ENTRY_CopyBytes1,                         // XCHG
     /* 98 */ ENTRY_CopyBytes1,                         // CWDE
     /* 99 */ ENTRY_CopyBytes1,                         // CDQ
-#ifdef DETOURS_X64
+#if defined(_M_X64)
     /* 9A */ ENTRY_Invalid,                            // Invalid
 #else
     /* 9A */ ENTRY_CopyBytes5Or7Dynamic,               // CALL cp
@@ -1166,7 +1202,7 @@ const CDetourDis::COPYENTRY CDetourDis::s_rceCopyTable[] =
     /* CB */ ENTRY_CopyBytes1Dynamic,                  // RET
     /* CC */ ENTRY_CopyBytes1Dynamic,                  // INT 3
     /* CD */ ENTRY_CopyBytes2Dynamic,                  // INT ib
-#ifdef DETOURS_X64
+#if defined(_M_X64)
     /* CE */ ENTRY_Invalid,                            // Invalid
 #else
     /* CE */ ENTRY_CopyBytes1Dynamic,                  // INTO
@@ -1176,7 +1212,7 @@ const CDetourDis::COPYENTRY CDetourDis::s_rceCopyTable[] =
     /* D1 */ ENTRY_CopyBytes2Mod,                      // RCL/2, etc.
     /* D2 */ ENTRY_CopyBytes2Mod,                      // RCL/2, etc.
     /* D3 */ ENTRY_CopyBytes2Mod,                      // RCL/2, etc.
-#ifdef DETOURS_X64
+#if defined(_M_X64)
     /* D4 */ ENTRY_Invalid,                            // Invalid
     /* D5 */ ENTRY_Invalid,                            // Invalid
 #else
@@ -1203,7 +1239,7 @@ const CDetourDis::COPYENTRY CDetourDis::s_rceCopyTable[] =
     /* E7 */ ENTRY_CopyBytes2,                         // OUT ib
     /* E8 */ ENTRY_CopyBytes3Or5Target,                // CALL cd
     /* E9 */ ENTRY_CopyBytes3Or5Target,                // JMP cd
-#ifdef DETOURS_X64
+#if defined(_M_X64)
     /* EA */ ENTRY_Invalid,                            // Invalid
 #else
     /* EA */ ENTRY_CopyBytes5Or7Dynamic,               // JMP cp
@@ -1216,13 +1252,12 @@ const CDetourDis::COPYENTRY CDetourDis::s_rceCopyTable[] =
     /* F0 */ ENTRY_CopyBytesPrefix,                    // LOCK prefix
     /* F1 */ ENTRY_CopyBytes1Dynamic,                  // INT1 / ICEBP somewhat documented by AMD, not by Intel
     /* F2 */ ENTRY_CopyF2,                             // REPNE prefix
-//#ifdef DETOURS_X86
+
+    // This does presently suffice for AMD64 but it requires tracing
+    // through a bunch of code to verify and seems not worth maintaining.
+    // For x64: /* F3 */ ENTRY_CopyBytesPrefix
     /* F3 */ ENTRY_CopyF3,                             // REPE prefix
-//#else
-// This does presently suffice for AMD64 but it requires tracing
-// through a bunch of code to verify and seems not worth maintaining.
-//  /* F3 */ ENTRY_CopyBytesPrefix,                    // REPE prefix
-//#endif
+
     /* F4 */ ENTRY_CopyBytes1,                         // HLT
     /* F5 */ ENTRY_CopyBytes1,                         // CMC
     /* F6 */ ENTRY_CopyF6,                             // TEST/0, DIV/6
@@ -1239,7 +1274,7 @@ const CDetourDis::COPYENTRY CDetourDis::s_rceCopyTable[] =
 
 const CDetourDis::COPYENTRY CDetourDis::s_rceCopyTable0F[] =
 {
-#ifdef DETOURS_X86
+#if defined(_M_IX86)
     /* 00 */ ENTRY_Copy0F00,                           // sldt/0 str/1 lldt/2 ltr/3 err/4 verw/5 jmpe/6/dynamic invalid/7
 #else
     /* 00 */ ENTRY_CopyBytes2Mod,                      // sldt/0 str/1 lldt/2 ltr/3 err/4 verw/5 jmpe/6/dynamic invalid/7
@@ -1279,13 +1314,13 @@ const CDetourDis::COPYENTRY CDetourDis::s_rceCopyTable0F[] =
     /* 21 */ ENTRY_CopyBytes2Mod,                      // MOV/r
     /* 22 */ ENTRY_CopyBytes2Mod,                      // MOV/r
     /* 23 */ ENTRY_CopyBytes2Mod,                      // MOV/r
-#ifdef DETOURS_X64
+#if defined(_M_X64)
     /* 24 */ ENTRY_Invalid,                            // _24
 #else
     /* 24 */ ENTRY_CopyBytes2Mod,                      // MOV/r,TR TR is test register on 80386 and 80486, removed in Pentium
 #endif
     /* 25 */ ENTRY_Invalid,                            // _25
-#ifdef DETOURS_X64
+#if defined(_M_X64)
     /* 26 */ ENTRY_Invalid,                            // _26
 #else
     /* 26 */ ENTRY_CopyBytes2Mod,                      // MOV TR/r TR is test register on 80386 and 80486, removed in Pentium
@@ -1453,7 +1488,7 @@ const CDetourDis::COPYENTRY CDetourDis::s_rceCopyTable0F[] =
     /* B5 */ ENTRY_CopyBytes2Mod,                      // LGS/r
     /* B6 */ ENTRY_CopyBytes2Mod,                      // MOVZX/r
     /* B7 */ ENTRY_CopyBytes2Mod,                      // MOVZX/r
-#ifdef DETOURS_X86
+#if defined(_M_IX86)
     /* B8 */ ENTRY_Copy0FB8,                           // jmpe f3/popcnt
 #else
     /* B8 */ ENTRY_CopyBytes2Mod,                      // f3/popcnt
@@ -1533,13 +1568,13 @@ const CDetourDis::COPYENTRY CDetourDis::s_rceCopyTable0F[] =
 
 BOOL CDetourDis::SanityCheckSystem()
 {
-    C_ASSERT(ARRAYSIZE(CDetourDis::s_rceCopyTable) == 256);
-    C_ASSERT(ARRAYSIZE(CDetourDis::s_rceCopyTable0F) == 256);
+    static_assert(ARRAYSIZE(CDetourDis::s_rceCopyTable) == 256);
+    static_assert(ARRAYSIZE(CDetourDis::s_rceCopyTable0F) == 256);
     return TRUE;
 }
-#endif // defined(DETOURS_X64) || defined(DETOURS_X86)
+#endif // defined(_M_X64) || defined(_M_IX86)
 
-#ifdef DETOURS_ARM64
+#if defined(_M_ARM64)
 
 #define c_LR        30          // The register number for the Link Register
 #define c_SP        31          // The register number for the Stack Pointer
@@ -1575,28 +1610,25 @@ BOOL CDetourDis::SanityCheckSystem()
 
 class CDetourDis
 {
-  public:
+public:
     CDetourDis();
 
-    PBYTE   CopyInstruction(PBYTE pDst,
-                            PBYTE pSrc,
-                            PBYTE *ppTarget,
-                            LONG *plExtra);
+    PBYTE CopyInstruction(PBYTE pDst, PBYTE pSrc, PBYTE* ppTarget, LONG* plExtra);
 
-  public:
-    typedef BYTE (CDetourDis::* COPYFUNC)(PBYTE pbDst, PBYTE pbSrc);
+public:
+    typedef BYTE(CDetourDis::*COPYFUNC)(PBYTE pbDst, PBYTE pbSrc);
 
     union AddImm12
     {
         DWORD Assembled;
         struct
         {
-            DWORD Rd : 5;           // Destination register
-            DWORD Rn : 5;           // Source register
-            DWORD Imm12 : 12;       // 12-bit immediate
-            DWORD Shift : 2;        // shift (must be 0 or 1)
-            DWORD Opcode1 : 7;      // Must be 0010001 == 0x11
-            DWORD Size : 1;         // 0 = 32-bit, 1 = 64-bit
+            DWORD Rd : 5;       // Destination register
+            DWORD Rn : 5;       // Source register
+            DWORD Imm12 : 12;   // 12-bit immediate
+            DWORD Shift : 2;    // shift (must be 0 or 1)
+            DWORD Opcode1 : 7;  // Must be 0010001 == 0x11
+            DWORD Size : 1;     // 0 = 32-bit, 1 = 64-bit
         } s;
         static DWORD Assemble(DWORD size, DWORD rd, DWORD rn, ULONG imm, DWORD shift)
         {
@@ -1609,8 +1641,14 @@ class CDetourDis
             temp.s.Size = size;
             return temp.Assembled;
         }
-        static DWORD AssembleAdd32(DWORD rd, DWORD rn, ULONG imm, DWORD shift) { return Assemble(0, rd, rn, imm, shift); }
-        static DWORD AssembleAdd64(DWORD rd, DWORD rn, ULONG imm, DWORD shift) { return Assemble(1, rd, rn, imm, shift); }
+        static DWORD AssembleAdd32(DWORD rd, DWORD rn, ULONG imm, DWORD shift)
+        {
+            return Assemble(0, rd, rn, imm, shift);
+        }
+        static DWORD AssembleAdd64(DWORD rd, DWORD rn, ULONG imm, DWORD shift)
+        {
+            return Assemble(1, rd, rn, imm, shift);
+        }
     };
 
     union Adr19
@@ -1618,13 +1656,16 @@ class CDetourDis
         DWORD Assembled;
         struct
         {
-            DWORD Rd : 5;           // Destination register
-            DWORD Imm19 : 19;       // 19-bit upper immediate
-            DWORD Opcode1 : 5;      // Must be 10000 == 0x10
-            DWORD Imm2 : 2;         // 2-bit lower immediate
-            DWORD Type : 1;         // 0 = ADR, 1 = ADRP
+            DWORD Rd : 5;       // Destination register
+            DWORD Imm19 : 19;   // 19-bit upper immediate
+            DWORD Opcode1 : 5;  // Must be 10000 == 0x10
+            DWORD Imm2 : 2;     // 2-bit lower immediate
+            DWORD Type : 1;     // 0 = ADR, 1 = ADRP
         } s;
-        inline LONG Imm() const { DWORD Imm = (s.Imm19 << 2) | s.Imm2; return (LONG)(Imm << 11) >> 11; }
+        inline LONG Imm() const
+        {
+            DWORD Imm = (s.Imm19 << 2) | s.Imm2; return (LONG)(Imm << 11) >> 11;
+        }
         static DWORD Assemble(DWORD type, DWORD rd, LONG delta)
         {
             Adr19 temp;
@@ -1635,8 +1676,14 @@ class CDetourDis
             temp.s.Type = type;
             return temp.Assembled;
         }
-        static DWORD AssembleAdr(DWORD rd, LONG delta) { return Assemble(0, rd, delta); }
-        static DWORD AssembleAdrp(DWORD rd, LONG delta) { return Assemble(1, rd, delta); }
+        static DWORD AssembleAdr(DWORD rd, LONG delta)
+        {
+            return Assemble(0, rd, delta);
+        }
+        static DWORD AssembleAdrp(DWORD rd, LONG delta)
+        {
+            return Assemble(1, rd, delta);
+        }
     };
 
     union Bcc19
@@ -1649,7 +1696,10 @@ class CDetourDis
             DWORD Imm19 : 19;       // 19-bit immediate
             DWORD Opcode2 : 8;      // Must be 01010100 == 0x54
         } s;
-        inline LONG Imm() const { return (LONG)(s.Imm19 << 13) >> 11; }
+        inline LONG Imm() const
+        {
+            return (LONG)(s.Imm19 << 13) >> 11;
+        }
         static DWORD AssembleBcc(DWORD condition, LONG delta)
         {
             Bcc19 temp;
@@ -1666,11 +1716,14 @@ class CDetourDis
         DWORD Assembled;
         struct
         {
-            DWORD Imm26 : 26;       // 26-bit immediate
-            DWORD Opcode1 : 5;      // Must be 00101 == 0x5
-            DWORD Link : 1;         // 0 = B, 1 = BL
+            DWORD Imm26 : 26;   // 26-bit immediate
+            DWORD Opcode1 : 5;  // Must be 00101 == 0x5
+            DWORD Link : 1;     // 0 = B, 1 = BL
         } s;
-        inline LONG Imm() const { return (LONG)(s.Imm26 << 6) >> 4; }
+        inline LONG Imm() const
+        {
+            return (LONG)(s.Imm26 << 6) >> 4;
+        }
         static DWORD Assemble(DWORD link, LONG delta)
         {
             Branch26 temp;
@@ -1679,8 +1732,14 @@ class CDetourDis
             temp.s.Link = link;
             return temp.Assembled;
         }
-        static DWORD AssembleB(LONG delta) { return Assemble(0, delta); }
-        static DWORD AssembleBl(LONG delta) { return Assemble(1, delta); }
+        static DWORD AssembleB(LONG delta)
+        {
+            return Assemble(0, delta);
+        }
+        static DWORD AssembleBl(LONG delta)
+        {
+            return Assemble(1, delta);
+        }
     };
 
     union Br
@@ -1688,10 +1747,10 @@ class CDetourDis
         DWORD Assembled;
         struct
         {
-            DWORD Opcode1 : 5;      // Must be 00000 == 0
-            DWORD Rn : 5;           // Register number
-            DWORD Opcode2 : 22;     // Must be 1101011000011111000000 == 0x3587c0 for Br
-                                    //                                   0x358fc0 for Brl
+            DWORD Opcode1 : 5;  // Must be 00000 == 0
+            DWORD Rn : 5;       // Register number
+            DWORD Opcode2 : 22; // Must be 1101011000011111000000 == 0x3587c0 for Br
+                                //                                   0x358fc0 for Brl
         } s;
         static DWORD Assemble(DWORD rn, bool link)
         {
@@ -1718,13 +1777,16 @@ class CDetourDis
         DWORD Assembled;
         struct
         {
-            DWORD Rt : 5;           // Register to test
-            DWORD Imm19 : 19;       // 19-bit immediate
-            DWORD Nz : 1;           // 0 = CBZ, 1 = CBNZ
-            DWORD Opcode1 : 6;      // Must be 011010 == 0x1a
-            DWORD Size : 1;         // 0 = 32-bit, 1 = 64-bit
+            DWORD Rt : 5;       // Register to test
+            DWORD Imm19 : 19;   // 19-bit immediate
+            DWORD Nz : 1;       // 0 = CBZ, 1 = CBNZ
+            DWORD Opcode1 : 6;  // Must be 011010 == 0x1a
+            DWORD Size : 1;     // 0 = 32-bit, 1 = 64-bit
         } s;
-        inline LONG Imm() const { return (LONG)(s.Imm19 << 13) >> 11; }
+        inline LONG Imm() const
+        {
+            return (LONG)(s.Imm19 << 13) >> 11;
+        }
         static DWORD Assemble(DWORD size, DWORD nz, DWORD rt, LONG delta)
         {
             Cbz19 temp;
@@ -1742,14 +1804,17 @@ class CDetourDis
         DWORD Assembled;
         struct
         {
-            DWORD Rt : 5;           // Destination register
-            DWORD Imm19 : 19;       // 19-bit immediate
-            DWORD Opcode1 : 2;      // Must be 0
-            DWORD FpNeon : 1;       // 0 = LDR Wt/LDR Xt/LDRSW/PRFM, 1 = LDR St/LDR Dt/LDR Qt
-            DWORD Opcode2 : 3;      // Must be 011 = 3
-            DWORD Size : 2;         // 00 = LDR Wt/LDR St, 01 = LDR Xt/LDR Dt, 10 = LDRSW/LDR Qt, 11 = PRFM/invalid
+            DWORD Rt : 5;       // Destination register
+            DWORD Imm19 : 19;   // 19-bit immediate
+            DWORD Opcode1 : 2;  // Must be 0
+            DWORD FpNeon : 1;   // 0 = LDR Wt/LDR Xt/LDRSW/PRFM, 1 = LDR St/LDR Dt/LDR Qt
+            DWORD Opcode2 : 3;  // Must be 011 = 3
+            DWORD Size : 2;     // 00 = LDR Wt/LDR St, 01 = LDR Xt/LDR Dt, 10 = LDRSW/LDR Qt, 11 = PRFM/invalid
         } s;
-        inline LONG Imm() const { return (LONG)(s.Imm19 << 13) >> 11; }
+        inline LONG Imm() const
+        {
+            return (LONG)(s.Imm19 << 13) >> 11;
+        }
         static DWORD Assemble(DWORD size, DWORD fpneon, DWORD rt, LONG delta)
         {
             LdrLit19 temp;
@@ -1768,13 +1833,13 @@ class CDetourDis
         DWORD Assembled;
         struct
         {
-            DWORD Rt : 5;           // Destination register
-            DWORD Rn : 5;           // Base register
-            DWORD Imm12 : 12;       // 12-bit immediate
-            DWORD Opcode1 : 1;      // Must be 1 == 1
-            DWORD Opc : 1;          // Part of size
-            DWORD Opcode2 : 6;      // Must be 111101 == 0x3d
-            DWORD Size : 2;         // Size (0=8-bit, 1=16-bit, 2=32-bit, 3=64-bit, 4=128-bit)
+            DWORD Rt : 5;       // Destination register
+            DWORD Rn : 5;       // Base register
+            DWORD Imm12 : 12;   // 12-bit immediate
+            DWORD Opcode1 : 1;  // Must be 1 == 1
+            DWORD Opc : 1;      // Part of size
+            DWORD Opcode2 : 6;  // Must be 111101 == 0x3d
+            DWORD Size : 2;     // Size (0=8-bit, 1=16-bit, 2=32-bit, 3=64-bit, 4=128-bit)
         } s;
         static DWORD Assemble(DWORD size, DWORD rt, DWORD rn, ULONG imm)
         {
@@ -1795,12 +1860,12 @@ class CDetourDis
         DWORD Assembled;
         struct
         {
-            DWORD Rd : 5;           // Destination register
-            DWORD Imm16 : 16;       // Immediate
-            DWORD Shift : 2;        // Shift amount (0=0, 1=16, 2=32, 3=48)
-            DWORD Opcode : 6;       // Must be 100101 == 0x25
-            DWORD Type : 2;         // 0 = MOVN, 1 = reserved, 2 = MOVZ, 3 = MOVK
-            DWORD Size : 1;         // 0 = 32-bit, 1 = 64-bit
+            DWORD Rd : 5;       // Destination register
+            DWORD Imm16 : 16;   // Immediate
+            DWORD Shift : 2;    // Shift amount (0=0, 1=16, 2=32, 3=48)
+            DWORD Opcode : 6;   // Must be 100101 == 0x25
+            DWORD Type : 2;     // 0 = MOVN, 1 = reserved, 2 = MOVZ, 3 = MOVK
+            DWORD Size : 1;     // 0 = 32-bit, 1 = 64-bit
         } s;
         static DWORD Assemble(DWORD size, DWORD type, DWORD rd, DWORD imm, DWORD shift)
         {
@@ -1813,12 +1878,30 @@ class CDetourDis
             temp.s.Size = size;
             return temp.Assembled;
         }
-        static DWORD AssembleMovn32(DWORD rd, DWORD imm, DWORD shift) { return Assemble(0, 0, rd, imm, shift); }
-        static DWORD AssembleMovn64(DWORD rd, DWORD imm, DWORD shift) { return Assemble(1, 0, rd, imm, shift); }
-        static DWORD AssembleMovz32(DWORD rd, DWORD imm, DWORD shift) { return Assemble(0, 2, rd, imm, shift); }
-        static DWORD AssembleMovz64(DWORD rd, DWORD imm, DWORD shift) { return Assemble(1, 2, rd, imm, shift); }
-        static DWORD AssembleMovk32(DWORD rd, DWORD imm, DWORD shift) { return Assemble(0, 3, rd, imm, shift); }
-        static DWORD AssembleMovk64(DWORD rd, DWORD imm, DWORD shift) { return Assemble(1, 3, rd, imm, shift); }
+        static DWORD AssembleMovn32(DWORD rd, DWORD imm, DWORD shift)
+        {
+            return Assemble(0, 0, rd, imm, shift);
+        }
+        static DWORD AssembleMovn64(DWORD rd, DWORD imm, DWORD shift)
+        {
+            return Assemble(1, 0, rd, imm, shift);
+        }
+        static DWORD AssembleMovz32(DWORD rd, DWORD imm, DWORD shift)
+        {
+            return Assemble(0, 2, rd, imm, shift);
+        }
+        static DWORD AssembleMovz64(DWORD rd, DWORD imm, DWORD shift)
+        {
+            return Assemble(1, 2, rd, imm, shift);
+        }
+        static DWORD AssembleMovk32(DWORD rd, DWORD imm, DWORD shift)
+        {
+            return Assemble(0, 3, rd, imm, shift);
+        }
+        static DWORD AssembleMovk64(DWORD rd, DWORD imm, DWORD shift)
+        {
+            return Assemble(1, 3, rd, imm, shift);
+        }
     };
 
     union Tbz14
@@ -1826,14 +1909,17 @@ class CDetourDis
         DWORD Assembled;
         struct
         {
-            DWORD Rt : 5;           // Register to test
-            DWORD Imm14 : 14;       // 14-bit immediate
-            DWORD Bit : 5;          // 5-bit index
-            DWORD Nz : 1;           // 0 = TBZ, 1 = TBNZ
-            DWORD Opcode1 : 6;      // Must be 011011 == 0x1b
-            DWORD Size : 1;         // 0 = 32-bit, 1 = 64-bit
+            DWORD Rt : 5;       // Register to test
+            DWORD Imm14 : 14;   // 14-bit immediate
+            DWORD Bit : 5;      // 5-bit index
+            DWORD Nz : 1;       // 0 = TBZ, 1 = TBNZ
+            DWORD Opcode1 : 6;  // Must be 011011 == 0x1b
+            DWORD Size : 1;     // 0 = 32-bit, 1 = 64-bit
         } s;
-        inline LONG Imm() const { return (LONG)(s.Imm14 << 18) >> 16; }
+        inline LONG Imm() const
+        {
+            return (LONG)(s.Imm14 << 18) >> 16;
+        }
         static DWORD Assemble(DWORD size, DWORD nz, DWORD rt, DWORD bit, LONG delta)
         {
             Tbz14 temp;
@@ -1848,19 +1934,19 @@ class CDetourDis
     };
 
 
-  protected:
-    BYTE    PureCopy32(BYTE* pSource, BYTE* pDest);
-    BYTE    EmitMovImmediate(PULONG& pDstInst, BYTE rd, UINT64 immediate);
-    BYTE    CopyAdr(BYTE* pSource, BYTE* pDest, ULONG instruction);
-    BYTE    CopyBcc(BYTE* pSource, BYTE* pDest, ULONG instruction);
-    BYTE    CopyB(BYTE* pSource, BYTE* pDest, ULONG instruction);
-    BYTE    CopyBl(BYTE* pSource, BYTE* pDest, ULONG instruction);
-    BYTE    CopyB_or_Bl(BYTE* pSource, BYTE* pDest, ULONG instruction, bool link);
-    BYTE    CopyCbz(BYTE* pSource, BYTE* pDest, ULONG instruction);
-    BYTE    CopyTbz(BYTE* pSource, BYTE* pDest, ULONG instruction);
-    BYTE    CopyLdrLiteral(BYTE* pSource, BYTE* pDest, ULONG instruction);
+protected:
+    BYTE PureCopy32(BYTE* pSource, BYTE* pDest);
+    BYTE EmitMovImmediate(PULONG& pDstInst, BYTE rd, UINT64 immediate);
+    BYTE CopyAdr(BYTE* pSource, BYTE* pDest, ULONG instruction);
+    BYTE CopyBcc(BYTE* pSource, BYTE* pDest, ULONG instruction);
+    BYTE CopyB(BYTE* pSource, BYTE* pDest, ULONG instruction);
+    BYTE CopyBl(BYTE* pSource, BYTE* pDest, ULONG instruction);
+    BYTE CopyB_or_Bl(BYTE* pSource, BYTE* pDest, ULONG instruction, bool link);
+    BYTE CopyCbz(BYTE* pSource, BYTE* pDest, ULONG instruction);
+    BYTE CopyTbz(BYTE* pSource, BYTE* pDest, ULONG instruction);
+    BYTE CopyLdrLiteral(BYTE* pSource, BYTE* pDest, ULONG instruction);
 
-  protected:
+protected:
     ULONG GetInstruction(BYTE* pSource)
     {
         return ((PULONG)pSource)[0];
@@ -1872,14 +1958,14 @@ class CDetourDis
         return sizeof(ULONG);
     }
 
-  protected:
+protected:
     PBYTE   m_pbTarget;
     BYTE    m_rbScratchDst[128]; // matches or exceeds rbCode
 };
 
 BYTE CDetourDis::PureCopy32(BYTE* pSource, BYTE* pDest)
 {
-    *(ULONG *)pDest = *(ULONG*)pSource;
+    *(ULONG*)pDest = *(ULONG*)pSource;
     return sizeof(DWORD);
 }
 
@@ -1890,39 +1976,46 @@ CDetourDis::CDetourDis() :
 {
 }
 
-PBYTE CDetourDis::CopyInstruction(PBYTE pDst,
-                                  PBYTE pSrc,
-                                  PBYTE *ppTarget,
-                                  LONG *plExtra)
+PBYTE CDetourDis::CopyInstruction(PBYTE pDst, PBYTE pSrc, PBYTE* ppTarget, LONG* plExtra)
 {
-    if (pDst == NULL) {
+    if (pDst == NULL)
+    {
         pDst = m_rbScratchDst;
     }
 
     DWORD Instruction = GetInstruction(pSrc);
 
     ULONG CopiedSize;
-    if ((Instruction & 0x1f000000) == 0x10000000) {
+    if ((Instruction & 0x1f000000) == 0x10000000)
+    {
         CopiedSize = CopyAdr(pSrc, pDst, Instruction);
-    } else if ((Instruction & 0xff000010) == 0x54000000) {
+    } else if ((Instruction & 0xff000010) == 0x54000000)
+    {
         CopiedSize = CopyBcc(pSrc, pDst, Instruction);
-    } else if ((Instruction & 0x7c000000) == 0x14000000) {
+    } else if ((Instruction & 0x7c000000) == 0x14000000)
+    {
         CopiedSize = CopyB_or_Bl(pSrc, pDst, Instruction, (Instruction & 0x80000000) != 0);
-    } else if ((Instruction & 0x7e000000) == 0x34000000) {
+    } else if ((Instruction & 0x7e000000) == 0x34000000)
+    {
         CopiedSize = CopyCbz(pSrc, pDst, Instruction);
-    } else if ((Instruction & 0x7e000000) == 0x36000000) {
+    } else if ((Instruction & 0x7e000000) == 0x36000000)
+    {
         CopiedSize = CopyTbz(pSrc, pDst, Instruction);
-    } else if ((Instruction & 0x3b000000) == 0x18000000) {
+    } else if ((Instruction & 0x3b000000) == 0x18000000)
+    {
         CopiedSize = CopyLdrLiteral(pSrc, pDst, Instruction);
-    } else {
+    } else
+    {
         CopiedSize = PureCopy32(pSrc, pDst);
     }
 
     // If the target is needed, store our target
-    if (ppTarget) {
+    if (ppTarget)
+    {
         *ppTarget = m_pbTarget;
     }
-    if (plExtra) {
+    if (plExtra)
+    {
         *plExtra = CopiedSize - sizeof(DWORD);
     }
 
@@ -1963,14 +2056,12 @@ BYTE CDetourDis::EmitMovImmediate(PULONG& pDstInst, BYTE rd, UINT64 immediate)
                     if (defaultPiece == 0xffff)
                     {
                         EmitInstruction(pDstInst, Mov16::AssembleMovn64(rd, curPiece ^ 0xffff, pieceNum));
-                    }
-                    else
+                    } else
                     {
                         EmitInstruction(pDstInst, Mov16::AssembleMovz64(rd, curPiece, pieceNum));
                     }
                     first = false;
-                }
-                else
+                } else
                 {
                     EmitInstruction(pDstInst, Mov16::AssembleMovk64(rd, curPiece, pieceNum));
                 }
@@ -2002,7 +2093,10 @@ BYTE CDetourDis::CopyAdr(BYTE* pSource, BYTE* pDest, ULONG instruction)
         else if (deltaPage >= -(1 << 20) && (deltaPage < (1 << 20)))
         {
             EmitInstruction(pDstInst, Adr19::AssembleAdrp(decoded.s.Rd, (LONG)deltaPage));
-            EmitInstruction(pDstInst, AddImm12::AssembleAdd32(decoded.s.Rd, decoded.s.Rd, ((ULONG)(ULONG_PTR)pTarget) & 0xfff, 0));
+            EmitInstruction(pDstInst, AddImm12::AssembleAdd32(decoded.s.Rd,
+                                                              decoded.s.Rd,
+                                                              ((ULONG)(ULONG_PTR)pTarget) & 0xfff,
+                                                              0));
         }
 
         // output as immediate move
@@ -2150,7 +2244,11 @@ BYTE CDetourDis::CopyTbz(BYTE* pSource, BYTE* pDest, ULONG instruction)
     // output as TBZ/NZ
     if (delta >= -(1 << 13) && delta < (1 << 13))
     {
-        EmitInstruction(pDstInst, Tbz14::Assemble(decoded.s.Size, decoded.s.Nz, decoded.s.Rt, decoded.s.Bit, (LONG)delta));
+        EmitInstruction(pDstInst, Tbz14::Assemble(decoded.s.Size,
+                                                  decoded.s.Nz,
+                                                  decoded.s.Rt,
+                                                  decoded.s.Bit,
+                                                  (LONG)delta));
     }
 
     // output as TBNZ/Z <skip>; B
@@ -2191,9 +2289,9 @@ BYTE CDetourDis::CopyLdrLiteral(BYTE* pSource, BYTE* pDest, ULONG instruction)
         UINT64 value = 0;
         switch (decoded.s.Size)
         {
-            case 0: value = *(ULONG*)pTarget;       break;
-            case 1: value = *(UINT64*)pTarget;   break;
-            case 2: value = *(LONG*)pTarget;        break;
+            case 0: value = *(ULONG*)pTarget; break;
+            case 1: value = *(UINT64*)pTarget; break;
+            case 2: value = *(LONG*)pTarget; break;
         }
         EmitMovImmediate(pDstInst, decoded.s.Rt, value);
     }
@@ -2209,11 +2307,12 @@ BYTE CDetourDis::CopyLdrLiteral(BYTE* pSource, BYTE* pDest, ULONG instruction)
 }
 
 
-PVOID WINAPI DetourCopyInstruction(_In_opt_ PVOID pDst,
-                                   _Inout_opt_ PVOID *ppDstPool,
-                                   _In_ PVOID pSrc,
-                                   _Out_opt_ PVOID *ppTarget,
-                                   _Out_opt_ LONG *plExtra)
+PVOID WINAPI DetourCopyInstruction(
+    _In_opt_ PVOID pDst,
+    _Inout_opt_ PVOID* ppDstPool,
+    _In_ PVOID pSrc,
+    _Out_opt_ PVOID* ppTarget,
+    _Out_opt_ LONG* plExtra)
 {
     UNREFERENCED_PARAMETER(ppDstPool);
 
@@ -2224,7 +2323,4 @@ PVOID WINAPI DetourCopyInstruction(_In_opt_ PVOID pDst,
                                         plExtra);
 }
 
-#endif // DETOURS_ARM64
-
-//
-///////////////////////////////////////////////////////////////// End of File.
+#endif // defined(_M_ARM64)
