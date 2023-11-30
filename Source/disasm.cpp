@@ -239,7 +239,7 @@ protected:
     BYTE    m_rbScratchDst[64]; // matches or exceeds rbCode
 };
 
-PVOID WINAPI DetourCopyInstruction(
+PVOID NTAPI DetourCopyInstruction(
     _In_opt_ PVOID pDst,
     _Inout_opt_ PVOID* ppDstPool,
     _In_ PVOID pSrc,
@@ -280,7 +280,7 @@ PBYTE CDetourDis::CopyInstruction(PBYTE pbDst, PBYTE pbSrc)
     if (NULL == pbSrc)
     {
         // We can't copy a non-existent instruction.
-        SetLastError(ERROR_INVALID_DATA);
+        WIE_SetLastStatus(STATUS_INVALID_PARAMETER);
         return NULL;
     }
 
@@ -2307,7 +2307,7 @@ BYTE CDetourDis::CopyLdrLiteral(BYTE* pSource, BYTE* pDest, ULONG instruction)
 }
 
 
-PVOID WINAPI DetourCopyInstruction(
+PVOID NTAPI DetourCopyInstruction(
     _In_opt_ PVOID pDst,
     _Inout_opt_ PVOID* ppDstPool,
     _In_ PVOID pSrc,

@@ -32,40 +32,93 @@ static PVOID s_pSystemRegionUpperBound = (PVOID)(ULONG_PTR)0x80000000;
 //
 static bool detour_is_imported(PBYTE pbCode, PBYTE pbAddress)
 {
+    NTSTATUS Status;
     MEMORY_BASIC_INFORMATION mbi;
-    VirtualQuery((PVOID)pbCode, &mbi, sizeof(mbi));
-    __try
-    {
-        PIMAGE_DOS_HEADER pDosHeader = (PIMAGE_DOS_HEADER)mbi.AllocationBase;
-        if (pDosHeader->e_magic != IMAGE_DOS_SIGNATURE)
-        {
-            return false;
-        }
+    PIMAGE_DOS_HEADER pDosHeader;
+    PIMAGE_NT_HEADERS pNtHeader;
+    PVOID pEndOfMem;
+    WORD wNtMagic;
 
-        PIMAGE_NT_HEADERS pNtHeader = (PIMAGE_NT_HEADERS)((PBYTE)pDosHeader + pDosHeader->e_lfanew);
-        if (pNtHeader->Signature != IMAGE_NT_SIGNATURE)
-        {
-            return false;
-        }
-
-        if (pbAddress >= Add2Ptr(pDosHeader,
-                                 pNtHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IAT].VirtualAddress) &&
-            pbAddress < Add2Ptr(pDosHeader,
-                                pNtHeader->OptionalHeader
-                                .DataDirectory[IMAGE_DIRECTORY_ENTRY_IAT].VirtualAddress +
-                                pNtHeader->OptionalHeader
-                                .DataDirectory[IMAGE_DIRECTORY_ENTRY_IAT].Size))
-        {
-            return true;
-        }
-    }
-#pragma prefast(suppress:28940, "A bad pointer means this probably isn't a PE header.")
-    __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ?
-             EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
+    Status = NtQueryVirtualMemory(NtCurrentProcess(), (PVOID)pbCode, MemoryBasicInformation, &mbi, sizeof(mbi), NULL);
+    if (!NT_SUCCESS(Status))
     {
         return false;
     }
-    return false;
+
+    /* Type should be MEM_IMAGE */
+    if (mbi.Type != MEM_IMAGE)
+    {
+        return false;
+    }
+
+    /* Cannot be uncommitted regions or guard pages */
+    if ((mbi.State != MEM_COMMIT) || ((mbi.Protect & 0xFF) == PAGE_NOACCESS) || (mbi.Protect & PAGE_GUARD))
+    {
+        return false;
+    }
+
+    /*
+     * pBase should >= MM_ALLOCATION_GRANULARITY and sSize should >= PAGE_SIZE,
+     * PAGE_SIZE always >= sizeof(IMAGE_DOS_HEADER) so we can access IMAGE_DOS_HEADER safely without boundary check.
+     */
+    if ((ULONG_PTR)mbi.AllocationBase < MM_ALLOCATION_GRANULARITY || mbi.RegionSize < PAGE_SIZE)
+    {
+        return false;
+    }
+    static_assert(PAGE_SIZE >= sizeof(IMAGE_DOS_HEADER));
+
+    /* Check IMAGE_DOS_HEADER */
+    pDosHeader = (PIMAGE_DOS_HEADER)mbi.AllocationBase;
+    if (pDosHeader->e_magic != IMAGE_DOS_SIGNATURE)
+    {
+        return false;
+    }
+    if (pDosHeader->e_lfanew < sizeof(*pDosHeader) || (ULONG)pDosHeader->e_lfanew > mbi.RegionSize)
+    {
+        return false;
+    }
+
+    /* Now we need perform boundary check in every single step */
+    pEndOfMem = Add2Ptr(mbi.AllocationBase, mbi.RegionSize);
+
+    /*
+     * Step forward to IMAGE_NT_HEADERS and check IMAGE_NT_SIGNATURE,
+     * check FileHeader.SizeOfOptionalHeader == 0 seems pointless
+     * unless compare it with sizeof(IMAGE_OPTIONAL_HEADER) explicitly.
+     */
+    pNtHeader = (PIMAGE_NT_HEADERS)Add2Ptr(pDosHeader, pDosHeader->e_lfanew);
+    if (Add2Ptr(pNtHeader, sizeof(*pNtHeader)) > pEndOfMem)
+    {
+        return false;
+    }
+    if (pNtHeader->Signature != IMAGE_NT_SIGNATURE)
+    {
+        return false;
+    }
+
+    /* Step forward to IMAGE_OPTIONAL_HEADER and check magic */
+    static_assert(UFIELD_OFFSET(IMAGE_OPTIONAL_HEADER, Magic) == 0);
+    wNtMagic = pNtHeader->OptionalHeader.Magic;
+    if ((wNtMagic != IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
+         pNtHeader->FileHeader.SizeOfOptionalHeader != sizeof(IMAGE_OPTIONAL_HEADER64)) &&
+        (wNtMagic != IMAGE_NT_OPTIONAL_HDR32_MAGIC ||
+         pNtHeader->FileHeader.SizeOfOptionalHeader != sizeof(IMAGE_OPTIONAL_HEADER32)))
+    {
+        return false;
+    }
+
+    if (pbAddress < Add2Ptr(mbi.AllocationBase,
+                            pNtHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IAT].VirtualAddress) ||
+        pbAddress >= Add2Ptr(mbi.AllocationBase,
+                             pNtHeader->OptionalHeader
+                             .DataDirectory[IMAGE_DIRECTORY_ENTRY_IAT].VirtualAddress +
+                             pNtHeader->OptionalHeader
+                             .DataDirectory[IMAGE_DIRECTORY_ENTRY_IAT].Size))
+    {
+        return false;
+    }
+
+    return true;
 }
 
 inline ULONG_PTR detour_2gb_below(ULONG_PTR address)
@@ -589,15 +642,15 @@ struct _DETOUR_TRAMPOLINE
     //
     // The number is rounded up to 128. m_rbScratchDst should match this.
     //
-    BYTE            rbCode[128];    // target code + jmp to pbRemain
-    BYTE            cbCode;         // size of moved target code.
-    BYTE            cbCodeBreak[3]; // padding to make debugging easier.
-    BYTE            rbRestore[24];  // original target code.
-    BYTE            cbRestore;      // size of original target code.
-    BYTE            cbRestoreBreak[3]; // padding to make debugging easier.
-    _DETOUR_ALIGN   rAlign[8];      // instruction alignment array.
-    PBYTE           pbRemain;       // first instruction after moved code. [free list]
-    PBYTE           pbDetour;       // first instruction of detour function.
+    BYTE            rbCode[128];        // target code + jmp to pbRemain
+    BYTE            cbCode;             // size of moved target code.
+    BYTE            cbCodeBreak[3];     // padding to make debugging easier.
+    BYTE            rbRestore[24];      // original target code.
+    BYTE            cbRestore;          // size of original target code.
+    BYTE            cbRestoreBreak[3];  // padding to make debugging easier.
+    _DETOUR_ALIGN   rAlign[8];          // instruction alignment array.
+    PBYTE           pbRemain;           // first instruction after moved code. [free list]
+    PBYTE           pbDetour;           // first instruction of detour function.
 };
 
 static_assert(sizeof(_DETOUR_TRAMPOLINE) == 184);
@@ -891,30 +944,40 @@ const ULONG DETOUR_TRAMPOLINES_PER_REGION = (DETOUR_REGION_SIZE / sizeof(DETOUR_
 static PDETOUR_REGION s_pRegions = NULL; // List of all regions.
 static PDETOUR_REGION s_pRegion = NULL; // Default region.
 
-static DWORD detour_writable_trampoline_regions()
+static NTSTATUS detour_writable_trampoline_regions()
 {
+    NTSTATUS Status;
+    PVOID pMem;
+    SIZE_T sMem;
+    DWORD dwOld;
+
     // Mark all of the regions as writable.
+    sMem = DETOUR_REGION_SIZE;
     for (PDETOUR_REGION pRegion = s_pRegions; pRegion != NULL; pRegion = pRegion->pNext)
     {
-        DWORD dwOld;
-        if (!VirtualProtect(pRegion, DETOUR_REGION_SIZE, PAGE_EXECUTE_READWRITE, &dwOld))
+        pMem = pRegion;
+        Status = NtProtectVirtualMemory(NtCurrentProcess(), &pMem, &sMem, PAGE_EXECUTE_READWRITE, &dwOld);
+        if (!NT_SUCCESS(Status))
         {
-            return GetLastError();
+            return Status;
         }
     }
-    return NO_ERROR;
+    return STATUS_SUCCESS;
 }
 
 static void detour_runnable_trampoline_regions()
 {
-    HANDLE hProcess = GetCurrentProcess();
+    PVOID pMem;
+    SIZE_T sMem;
+    DWORD dwOld;
 
     // Mark all of the regions as executable.
+    sMem = DETOUR_REGION_SIZE;
     for (PDETOUR_REGION pRegion = s_pRegions; pRegion != NULL; pRegion = pRegion->pNext)
     {
-        DWORD dwOld;
-        VirtualProtect(pRegion, DETOUR_REGION_SIZE, PAGE_EXECUTE_READ, &dwOld);
-        FlushInstructionCache(hProcess, pRegion, DETOUR_REGION_SIZE);
+        pMem = pRegion;
+        NtProtectVirtualMemory(NtCurrentProcess(), &pMem, &sMem, PAGE_EXECUTE_READ, &dwOld);
+        NtFlushInstructionCache(NtCurrentProcess(), pRegion, DETOUR_REGION_SIZE);
     }
 }
 
@@ -945,14 +1008,17 @@ static PBYTE detour_alloc_round_up_to_region(PBYTE pbTry)
 
 static PVOID detour_alloc_region_from_lo(PBYTE pbLo, PBYTE pbHi)
 {
+    NTSTATUS Status;
+    PVOID pMem;
+    SIZE_T sMem;
+    MEMORY_BASIC_INFORMATION mbi;
+
     PBYTE pbTry = detour_alloc_round_up_to_region(pbLo);
 
     DETOUR_TRACE(" Looking for free region in %p..%p from %p:\n", pbLo, pbHi, pbTry);
 
     while (pbTry < pbHi)
     {
-        MEMORY_BASIC_INFORMATION mbi;
-
         if (pbTry >= s_pSystemRegionLowerBound && pbTry <= s_pSystemRegionUpperBound)
         {
             // Skip region reserved for system DLLs, but preserve address space entropy.
@@ -960,8 +1026,12 @@ static PVOID detour_alloc_region_from_lo(PBYTE pbLo, PBYTE pbHi)
             continue;
         }
 
-        ZeroMemory(&mbi, sizeof(mbi));
-        if (!VirtualQuery(pbTry, &mbi, sizeof(mbi)))
+        if (!NT_SUCCESS(NtQueryVirtualMemory(NtCurrentProcess(),
+                                             pbTry,
+                                             MemoryBasicInformation,
+                                             &mbi,
+                                             sizeof(mbi),
+                                             NULL)))
         {
             break;
         }
@@ -974,12 +1044,18 @@ static PVOID detour_alloc_region_from_lo(PBYTE pbLo, PBYTE pbHi)
 
         if (mbi.State == MEM_FREE && mbi.RegionSize >= DETOUR_REGION_SIZE)
         {
-
-            PVOID pv = VirtualAlloc(pbTry, DETOUR_REGION_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-            if (pv != NULL)
+            pMem = pbTry;
+            sMem = DETOUR_REGION_SIZE;
+            Status = NtAllocateVirtualMemory(NtCurrentProcess(),
+                                             &pMem,
+                                             0,
+                                             &sMem,
+                                             MEM_COMMIT | MEM_RESERVE,
+                                             PAGE_EXECUTE_READWRITE);
+            if (NT_SUCCESS(Status))
             {
-                return pv;
-            } else if (GetLastError() == ERROR_DYNAMIC_CODE_BLOCKED)
+                return pMem;
+            } else if (Status == STATUS_DYNAMIC_CODE_BLOCKED)
             {
                 return NULL;
             }
@@ -996,14 +1072,17 @@ static PVOID detour_alloc_region_from_lo(PBYTE pbLo, PBYTE pbHi)
 
 static PVOID detour_alloc_region_from_hi(PBYTE pbLo, PBYTE pbHi)
 {
+    NTSTATUS Status;
+    PVOID pMem;
+    SIZE_T sMem;
+    MEMORY_BASIC_INFORMATION mbi;
+
     PBYTE pbTry = detour_alloc_round_down_to_region(pbHi - DETOUR_REGION_SIZE);
 
     DETOUR_TRACE(" Looking for free region in %p..%p from %p:\n", pbLo, pbHi, pbTry);
 
     while (pbTry > pbLo)
     {
-        MEMORY_BASIC_INFORMATION mbi;
-
         DETOUR_TRACE("  Try %p\n", pbTry);
         if (pbTry >= s_pSystemRegionLowerBound && pbTry <= s_pSystemRegionUpperBound)
         {
@@ -1012,8 +1091,12 @@ static PVOID detour_alloc_region_from_hi(PBYTE pbLo, PBYTE pbHi)
             continue;
         }
 
-        ZeroMemory(&mbi, sizeof(mbi));
-        if (!VirtualQuery(pbTry, &mbi, sizeof(mbi)))
+        if (!NT_SUCCESS(NtQueryVirtualMemory(NtCurrentProcess(),
+                                             pbTry,
+                                             MemoryBasicInformation,
+                                             &mbi,
+                                             sizeof(mbi),
+                                             NULL)))
         {
             break;
         }
@@ -1026,12 +1109,18 @@ static PVOID detour_alloc_region_from_hi(PBYTE pbLo, PBYTE pbHi)
 
         if (mbi.State == MEM_FREE && mbi.RegionSize >= DETOUR_REGION_SIZE)
         {
-
-            PVOID pv = VirtualAlloc(pbTry, DETOUR_REGION_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-            if (pv != NULL)
+            pMem = pbTry;
+            sMem = DETOUR_REGION_SIZE;
+            Status = NtAllocateVirtualMemory(NtCurrentProcess(),
+                                             &pMem,
+                                             0,
+                                             &sMem,
+                                             MEM_COMMIT | MEM_RESERVE,
+                                             PAGE_EXECUTE_READWRITE);
+            if (NT_SUCCESS(Status))
             {
-                return pv;
-            } else if (GetLastError() == ERROR_DYNAMIC_CODE_BLOCKED)
+                return pMem;
+            } else if (Status == STATUS_DYNAMIC_CODE_BLOCKED)
             {
                 return NULL;
             }
@@ -1118,7 +1207,7 @@ found_region:
             return NULL;
         }
         s_pRegion->pFree = (PDETOUR_TRAMPOLINE)pTrampoline->pbRemain;
-        memset(pTrampoline, 0xcc, sizeof(*pTrampoline));
+        RtlFillMemory(pTrampoline, sizeof(*pTrampoline), 0xcc);
         return pTrampoline;
     }
 
@@ -1167,7 +1256,7 @@ static void detour_free_trampoline(PDETOUR_TRAMPOLINE pTrampoline)
 {
     PDETOUR_REGION pRegion = (PDETOUR_REGION)((ULONG_PTR)pTrampoline & ~(ULONG_PTR)0xffff);
 
-    memset(pTrampoline, 0, sizeof(*pTrampoline));
+    RtlZeroMemory(pTrampoline, sizeof(*pTrampoline));
     pTrampoline->pbRemain = (PBYTE)pRegion->pFree;
     pRegion->pFree = pTrampoline;
 }
@@ -1201,6 +1290,9 @@ static BOOL detour_is_region_empty(PDETOUR_REGION pRegion)
 
 static void detour_free_unused_trampoline_regions()
 {
+    PVOID pMem;
+    SIZE_T sMem;
+
     PDETOUR_REGION* ppRegionBase = &s_pRegions;
     PDETOUR_REGION pRegion = s_pRegions;
 
@@ -1210,7 +1302,9 @@ static void detour_free_unused_trampoline_regions()
         {
             *ppRegionBase = pRegion->pNext;
 
-            VirtualFree(pRegion, 0, MEM_RELEASE);
+            pMem = pRegion;
+            sMem = 0;
+            NtFreeVirtualMemory(NtCurrentProcess(), &pMem, &sMem, MEM_RELEASE);
             s_pRegion = NULL;
         } else
         {
@@ -1241,35 +1335,35 @@ struct DetourOperation
 static BOOL s_fIgnoreTooSmall = FALSE;
 static BOOL s_fRetainRegions = FALSE;
 
-static LONG s_nPendingThreadId = 0; // Thread owning pending transaction.
-static LONG s_nPendingError = NO_ERROR;
+static ULONG s_nPendingThreadId = 0; // Thread owning pending transaction.
+static NTSTATUS s_nPendingError = STATUS_SUCCESS;
 static PVOID* s_ppPendingError = NULL;
 static DetourThread* s_pPendingThreads = NULL;
 static DetourOperation* s_pPendingOperations = NULL;
 
 //////////////////////////////////////////////////////////////////////////////
 //
-PVOID WINAPI DetourCodeFromPointer(_In_ PVOID pPointer, _Out_opt_ PVOID* ppGlobals)
+PVOID NTAPI DetourCodeFromPointer(_In_ PVOID pPointer, _Out_opt_ PVOID* ppGlobals)
 {
     return detour_skip_jmp((PBYTE)pPointer, ppGlobals);
 }
 
 //////////////////////////////////////////////////////////// Transaction APIs.
 //
-LONG WINAPI DetourTransactionBegin()
+NTSTATUS NTAPI DetourTransactionBegin()
 {
     // Only one transaction is allowed at a time.
     _Benign_race_begin_
         if (s_nPendingThreadId != 0)
         {
-            return ERROR_INVALID_OPERATION;
+            return STATUS_TRANSACTIONAL_CONFLICT;
         }
     _Benign_race_end_
 
         // Make sure only one thread can start a transaction.
-        if (InterlockedCompareExchange(&s_nPendingThreadId, (LONG)GetCurrentThreadId(), 0) != 0)
+        if (_InterlockedCompareExchange(&s_nPendingThreadId, CURRENT_THREAD_ID, 0) != 0)
         {
-            return ERROR_INVALID_OPERATION;
+            return STATUS_TRANSACTIONAL_CONFLICT;
         }
 
     s_pPendingOperations = NULL;
@@ -1282,20 +1376,24 @@ LONG WINAPI DetourTransactionBegin()
     return s_nPendingError;
 }
 
-LONG WINAPI DetourTransactionAbort()
+NTSTATUS NTAPI DetourTransactionAbort()
 {
-    if (s_nPendingThreadId != (LONG)GetCurrentThreadId())
+    PVOID pMem;
+    SIZE_T sMem;
+    DWORD dwOld;
+
+    if (s_nPendingThreadId != CURRENT_THREAD_ID)
     {
-        return ERROR_INVALID_OPERATION;
+        return STATUS_TRANSACTIONAL_CONFLICT;
     }
 
     // Restore all of the page permissions.
     for (DetourOperation* o = s_pPendingOperations; o != NULL;)
     {
         // We don't care if this fails, because the code is still accessible.
-        DWORD dwOld;
-        VirtualProtect(o->pbTarget, o->pTrampoline->cbRestore, o->dwPerm, &dwOld);
-
+        pMem = o->pbTarget;
+        sMem = o->pTrampoline->cbRestore;
+        NtProtectVirtualMemory(NtCurrentProcess(), &pMem, &sMem, o->dwPerm, &dwOld);
         if (!o->fIsRemove)
         {
             if (o->pTrampoline)
@@ -1318,7 +1416,7 @@ LONG WINAPI DetourTransactionAbort()
     for (DetourThread* t = s_pPendingThreads; t != NULL;)
     {
         // There is nothing we can do if this fails.
-        ResumeThread(t->hThread);
+        NtResumeThread(t->hThread, NULL);
 
         DetourThread* n = t->pNext;
         delete t;
@@ -1327,10 +1425,10 @@ LONG WINAPI DetourTransactionAbort()
     s_pPendingThreads = NULL;
     s_nPendingThreadId = 0;
 
-    return NO_ERROR;
+    return STATUS_SUCCESS;
 }
 
-LONG WINAPI DetourTransactionCommit()
+NTSTATUS NTAPI DetourTransactionCommit()
 {
     return DetourTransactionCommitEx(NULL);
 }
@@ -1359,37 +1457,41 @@ static LONG detour_align_from_target(PDETOUR_TRAMPOLINE pTrampoline, LONG obTarg
     return 0;
 }
 
-LONG WINAPI DetourTransactionCommitEx(_Out_opt_ PVOID** pppFailedPointer)
+NTSTATUS NTAPI DetourTransactionCommitEx(_Out_opt_ PVOID** pppFailedPointer)
 {
-    if (pppFailedPointer != NULL)
-    {
-        // Used to get the last error.
-        *pppFailedPointer = s_ppPendingError;
-    }
-    if (s_nPendingThreadId != (LONG)GetCurrentThreadId())
-    {
-        return ERROR_INVALID_OPERATION;
-    }
-
-    // If any of the pending operations failed, then we abort the whole transaction.
-    if (s_nPendingError != NO_ERROR)
-    {
-        DETOUR_BREAK();
-        DetourTransactionAbort();
-        return s_nPendingError;
-    }
+    PVOID pMem;
+    SIZE_T sMem;
+    DWORD dwOld;
 
     // Common variables.
     DetourOperation* o;
     DetourThread* t;
     BOOL freed = FALSE;
 
+    if (pppFailedPointer != NULL)
+    {
+        // Used to get the last error.
+        *pppFailedPointer = s_ppPendingError;
+    }
+    if (s_nPendingThreadId != CURRENT_THREAD_ID)
+    {
+        return STATUS_TRANSACTIONAL_CONFLICT;
+    }
+
+    // If any of the pending operations failed, then we abort the whole transaction.
+    if (s_nPendingError != STATUS_SUCCESS)
+    {
+        DETOUR_BREAK();
+        DetourTransactionAbort();
+        return s_nPendingError;
+    }
+
     // Insert or remove each of the detours.
     for (o = s_pPendingOperations; o != NULL; o = o->pNext)
     {
         if (o->fIsRemove)
         {
-            CopyMemory(o->pbTarget, o->pTrampoline->rbRestore, o->pTrampoline->cbRestore);
+            RtlCopyMemory(o->pbTarget, o->pTrampoline->rbRestore, o->pTrampoline->cbRestore);
             *o->ppbPointer = o->pbTarget;
         } else
         {
@@ -1465,7 +1567,7 @@ LONG WINAPI DetourTransactionCommitEx(_Out_opt_ PVOID** pppFailedPointer)
 #define DETOURS_EIP Pc
 #endif
 
-        if (GetThreadContext(t->hThread, &cxt))
+        if (NT_SUCCESS(NtGetContextThread(t->hThread, &cxt)))
         {
             for (o = s_pPendingOperations; o != NULL; o = o->pNext)
             {
@@ -1479,7 +1581,7 @@ LONG WINAPI DetourTransactionCommitEx(_Out_opt_ PVOID** pppFailedPointer)
                             detour_align_from_trampoline(o->pTrampoline,
                                                          (BYTE)(cxt.DETOURS_EIP - (ULONG_PTR)o->pTrampoline));
 
-                        SetThreadContext(t->hThread, &cxt);
+                        NtSetContextThread(t->hThread, &cxt);
                     }
                 } else
                 {
@@ -1488,10 +1590,9 @@ LONG WINAPI DetourTransactionCommitEx(_Out_opt_ PVOID** pppFailedPointer)
                     {
 
                         cxt.DETOURS_EIP = (ULONG_PTR)o->pTrampoline +
-                            detour_align_from_target(o->pTrampoline,
-                                                     (BYTE)(cxt.DETOURS_EIP - (ULONG_PTR)o->pbTarget));
+                            detour_align_from_target(o->pTrampoline, (BYTE)(cxt.DETOURS_EIP - (ULONG_PTR)o->pbTarget));
 
-                        SetThreadContext(t->hThread, &cxt);
+                        NtSetContextThread(t->hThread, &cxt);
                     }
                 }
             }
@@ -1500,13 +1601,13 @@ LONG WINAPI DetourTransactionCommitEx(_Out_opt_ PVOID** pppFailedPointer)
     }
 
     // Restore all of the page permissions and flush the icache.
-    HANDLE hProcess = GetCurrentProcess();
     for (o = s_pPendingOperations; o != NULL;)
     {
         // We don't care if this fails, because the code is still accessible.
-        DWORD dwOld;
-        VirtualProtect(o->pbTarget, o->pTrampoline->cbRestore, o->dwPerm, &dwOld);
-        FlushInstructionCache(hProcess, o->pbTarget, o->pTrampoline->cbRestore);
+        pMem = o->pbTarget;
+        sMem = o->pTrampoline->cbRestore;
+        NtProtectVirtualMemory(NtCurrentProcess(), &pMem, &sMem, o->dwPerm, &dwOld);
+        NtFlushInstructionCache(NtCurrentProcess(), o->pbTarget, o->pTrampoline->cbRestore);
 
         if (o->fIsRemove && o->pTrampoline)
         {
@@ -1534,7 +1635,7 @@ LONG WINAPI DetourTransactionCommitEx(_Out_opt_ PVOID** pppFailedPointer)
     for (t = s_pPendingThreads; t != NULL;)
     {
         // There is nothing we can do if this fails.
-        ResumeThread(t->hThread);
+        NtResumeThread(t->hThread, NULL);
 
         DetourThread* n = t->pNext;
         delete t;
@@ -1551,41 +1652,41 @@ LONG WINAPI DetourTransactionCommitEx(_Out_opt_ PVOID** pppFailedPointer)
     return s_nPendingError;
 }
 
-LONG WINAPI DetourUpdateThread(_In_ HANDLE hThread)
+NTSTATUS NTAPI DetourUpdateThread(_In_ HANDLE hThread)
 {
-    LONG error;
+    NTSTATUS Status;
 
     // If any of the pending operations failed, then we don't need to do this.
-    if (s_nPendingError != NO_ERROR)
+    if (s_nPendingError != STATUS_SUCCESS)
     {
         return s_nPendingError;
     }
 
     // Silently (and safely) drop any attempt to suspend our own thread.
-    if (hThread == GetCurrentThread())
+    if (hThread == NtCurrentThread())
     {
-        return NO_ERROR;
+        return STATUS_SUCCESS;
     }
 
     DetourThread* t = new(std::nothrow) DetourThread;
     if (t == NULL)
     {
-        error = ERROR_NOT_ENOUGH_MEMORY;
+        Status = STATUS_NO_MEMORY;
 fail:
         if (t != NULL)
         {
             delete t;
             t = NULL;
         }
-        s_nPendingError = error;
+        s_nPendingError = Status;
         s_ppPendingError = NULL;
         DETOUR_BREAK();
-        return error;
+        return Status;
     }
 
-    if (SuspendThread(hThread) == (DWORD)-1)
+    Status = NtSuspendThread(hThread, NULL);
+    if (!NT_SUCCESS(Status))
     {
-        error = GetLastError();
         DETOUR_BREAK();
         goto fail;
     }
@@ -1594,24 +1695,27 @@ fail:
     t->pNext = s_pPendingThreads;
     s_pPendingThreads = t;
 
-    return NO_ERROR;
+    return STATUS_SUCCESS;
 }
 
 ///////////////////////////////////////////////////////////// Transacted APIs.
 //
-LONG WINAPI DetourAttach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour)
+NTSTATUS NTAPI DetourAttach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour)
 {
     return DetourAttachEx(ppPointer, pDetour, NULL, NULL, NULL);
 }
 
-LONG WINAPI DetourAttachEx(
+NTSTATUS NTAPI DetourAttachEx(
     _Inout_ PVOID* ppPointer,
     _In_ PVOID pDetour,
     _Out_opt_ PDETOUR_TRAMPOLINE* ppRealTrampoline,
     _Out_opt_ PVOID* ppRealTarget,
     _Out_opt_ PVOID* ppRealDetour)
 {
-    LONG error = NO_ERROR;
+    NTSTATUS Status = STATUS_SUCCESS;
+    PVOID pMem;
+    SIZE_T sMem;
+    DWORD dwOld;
 
     if (ppRealTrampoline != NULL)
     {
@@ -1628,17 +1732,17 @@ LONG WINAPI DetourAttachEx(
     if (pDetour == NULL)
     {
         DETOUR_TRACE("empty detour\n");
-        return ERROR_INVALID_PARAMETER;
+        return STATUS_INVALID_PARAMETER;
     }
 
-    if (s_nPendingThreadId != (LONG)GetCurrentThreadId())
+    if (s_nPendingThreadId != CURRENT_THREAD_ID)
     {
-        DETOUR_TRACE("transaction conflict with thread id=%ld\n", s_nPendingThreadId);
-        return ERROR_INVALID_OPERATION;
+        DETOUR_TRACE("transaction conflict with thread id=%lu\n", s_nPendingThreadId);
+        return STATUS_TRANSACTIONAL_CONFLICT;
     }
 
     // If any of the pending operations failed, then we don't need to do this.
-    if (s_nPendingError != NO_ERROR)
+    if (s_nPendingError != STATUS_SUCCESS)
     {
         DETOUR_TRACE("pending transaction error=%ld\n", s_nPendingError);
         return s_nPendingError;
@@ -1647,16 +1751,16 @@ LONG WINAPI DetourAttachEx(
     if (ppPointer == NULL)
     {
         DETOUR_TRACE("ppPointer is null\n");
-        return ERROR_INVALID_HANDLE;
+        return STATUS_INVALID_HANDLE;
     }
     if (*ppPointer == NULL)
     {
-        error = ERROR_INVALID_HANDLE;
-        s_nPendingError = error;
+        Status = STATUS_INVALID_HANDLE;
+        s_nPendingError = Status;
         s_ppPendingError = ppPointer;
         DETOUR_TRACE("*ppPointer is null (ppPointer=%p)\n", ppPointer);
         DETOUR_BREAK();
-        return error;
+        return Status;
     }
 
     PBYTE pbTarget = (PBYTE)*ppPointer;
@@ -1692,9 +1796,9 @@ LONG WINAPI DetourAttachEx(
     o = new(std::nothrow) DetourOperation;
     if (o == NULL)
     {
-        error = ERROR_NOT_ENOUGH_MEMORY;
+        Status = STATUS_NO_MEMORY;
 fail:
-        s_nPendingError = error;
+        s_nPendingError = Status;
         DETOUR_BREAK();
 stop:
         if (pTrampoline != NULL)
@@ -1720,13 +1824,13 @@ stop:
             *ppRealTarget = NULL;
         }
         s_ppPendingError = ppPointer;
-        return error;
+        return Status;
     }
 
     pTrampoline = detour_alloc_trampoline(pbTarget);
     if (pTrampoline == NULL)
     {
-        error = ERROR_NOT_ENOUGH_MEMORY;
+        Status = STATUS_NO_MEMORY;
         DETOUR_BREAK();
         goto fail;
     }
@@ -1738,7 +1842,7 @@ stop:
 
     DETOUR_TRACE("detours: pbTramp=%p, pDetour=%p\n", pTrampoline, pDetour);
 
-    memset(pTrampoline->rAlign, 0, sizeof(pTrampoline->rAlign));
+    RtlZeroMemory(pTrampoline->rAlign, sizeof(pTrampoline->rAlign));
 
     // Determine the number of movable target instructions.
     PBYTE pbSrc = pbTarget;
@@ -1806,8 +1910,7 @@ stop:
     if (cbTarget < cbJump || nAlign > ARRAYSIZE(pTrampoline->rAlign))
     {
         // Too few instructions.
-
-        error = ERROR_INVALID_BLOCK;
+        Status = STATUS_INVALID_BLOCK_LENGTH;
         if (s_fIgnoreTooSmall)
         {
             goto stop;
@@ -1825,12 +1928,12 @@ stop:
 
     pTrampoline->cbCode = (BYTE)(pbTrampoline - pTrampoline->rbCode);
     pTrampoline->cbRestore = (BYTE)cbTarget;
-    CopyMemory(pTrampoline->rbRestore, pbTarget, cbTarget);
+    RtlCopyMemory(pTrampoline->rbRestore, pbTarget, cbTarget);
 
     if (cbTarget > sizeof(pTrampoline->rbCode) - cbJump)
     {
         // Too many instructions.
-        error = ERROR_INVALID_HANDLE;
+        Status = STATUS_INVALID_HANDLE;
         DETOUR_BREAK();
         goto fail;
     }
@@ -1852,10 +1955,11 @@ stop:
 
     UNREFERENCED_PARAMETER(pbTrampoline);
 
-    DWORD dwOld = 0;
-    if (!VirtualProtect(pbTarget, cbTarget, PAGE_EXECUTE_READWRITE, &dwOld))
+    pMem = pbTarget;
+    sMem = cbTarget;
+    Status = NtProtectVirtualMemory(NtCurrentProcess(), &pMem, &sMem, PAGE_EXECUTE_READWRITE, &dwOld);
+    if (!NT_SUCCESS(Status))
     {
-        error = GetLastError();
         DETOUR_BREAK();
         goto fail;
     }
@@ -1888,47 +1992,50 @@ stop:
     o->pNext = s_pPendingOperations;
     s_pPendingOperations = o;
 
-    return NO_ERROR;
+    return STATUS_SUCCESS;
 }
 
-LONG WINAPI DetourDetach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour)
+NTSTATUS NTAPI DetourDetach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour)
 {
-    LONG error = NO_ERROR;
+    NTSTATUS Status = STATUS_SUCCESS;
+    PVOID pMem;
+    SIZE_T sMem;
+    DWORD dwOld;
 
-    if (s_nPendingThreadId != (LONG)GetCurrentThreadId())
+    if (s_nPendingThreadId != CURRENT_THREAD_ID)
     {
-        return ERROR_INVALID_OPERATION;
+        return STATUS_TRANSACTIONAL_CONFLICT;
     }
 
     // If any of the pending operations failed, then we don't need to do this.
-    if (s_nPendingError != NO_ERROR)
+    if (s_nPendingError != STATUS_SUCCESS)
     {
         return s_nPendingError;
     }
 
     if (pDetour == NULL)
     {
-        return ERROR_INVALID_PARAMETER;
+        return STATUS_INVALID_PARAMETER;
     }
     if (ppPointer == NULL)
     {
-        return ERROR_INVALID_HANDLE;
+        return STATUS_INVALID_HANDLE;
     }
     if (*ppPointer == NULL)
     {
-        error = ERROR_INVALID_HANDLE;
-        s_nPendingError = error;
+        Status = STATUS_INVALID_HANDLE;
+        s_nPendingError = Status;
         s_ppPendingError = ppPointer;
         DETOUR_BREAK();
-        return error;
+        return Status;
     }
 
     DetourOperation* o = new(std::nothrow) DetourOperation;
     if (o == NULL)
     {
-        error = ERROR_NOT_ENOUGH_MEMORY;
+        Status = STATUS_NO_MEMORY;
 fail:
-        s_nPendingError = error;
+        s_nPendingError = Status;
         DETOUR_BREAK();
 stop:
         if (o != NULL)
@@ -1937,7 +2044,7 @@ stop:
             o = NULL;
         }
         s_ppPendingError = ppPointer;
-        return error;
+        return Status;
     }
 
     PDETOUR_TRAMPOLINE pTrampoline = (PDETOUR_TRAMPOLINE)DetourCodeFromPointer(*ppPointer, NULL);
@@ -1949,7 +2056,7 @@ stop:
     PBYTE pbTarget = pTrampoline->pbRemain - cbTarget;
     if (cbTarget == 0 || cbTarget > sizeof(pTrampoline->rbCode))
     {
-        error = ERROR_INVALID_BLOCK;
+        Status = STATUS_INVALID_BLOCK_LENGTH;
         if (s_fIgnoreTooSmall)
         {
             goto stop;
@@ -1962,7 +2069,7 @@ stop:
 
     if (pTrampoline->pbDetour != pDetour)
     {
-        error = ERROR_INVALID_BLOCK;
+        Status = STATUS_INVALID_BLOCK_LENGTH;
         if (s_fIgnoreTooSmall)
         {
             goto stop;
@@ -1973,10 +2080,11 @@ stop:
         }
     }
 
-    DWORD dwOld = 0;
-    if (!VirtualProtect(pbTarget, cbTarget, PAGE_EXECUTE_READWRITE, &dwOld))
+    pMem = pbTarget;
+    sMem = cbTarget;
+    Status = NtProtectVirtualMemory(NtCurrentProcess(), &pMem, &sMem, PAGE_EXECUTE_READWRITE, &dwOld);
+    if (!NT_SUCCESS(Status))
     {
-        error = GetLastError();
         DETOUR_BREAK();
         goto fail;
     }
@@ -1989,5 +2097,5 @@ stop:
     o->pNext = s_pPendingOperations;
     s_pPendingOperations = o;
 
-    return NO_ERROR;
+    return STATUS_SUCCESS;
 }

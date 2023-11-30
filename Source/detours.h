@@ -29,26 +29,26 @@ typedef struct _DETOUR_TRAMPOLINE DETOUR_TRAMPOLINE, *PDETOUR_TRAMPOLINE;
 
 EXTERN_C_START
 
-LONG WINAPI DetourTransactionBegin(VOID);
-LONG WINAPI DetourTransactionAbort(VOID);
-LONG WINAPI DetourTransactionCommit(VOID);
-LONG WINAPI DetourTransactionCommitEx(_Out_opt_ PVOID** pppFailedPointer);
+NTSTATUS NTAPI DetourTransactionBegin();
+NTSTATUS NTAPI DetourTransactionAbort();
+NTSTATUS NTAPI DetourTransactionCommit();
+NTSTATUS NTAPI DetourTransactionCommitEx(_Out_opt_ PVOID** pppFailedPointer);
 
-LONG WINAPI DetourUpdateThread(_In_ HANDLE hThread);
+NTSTATUS NTAPI DetourUpdateThread(_In_ HANDLE hThread);
 
-LONG WINAPI DetourAttach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour);
+NTSTATUS NTAPI DetourAttach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour);
 
-LONG WINAPI DetourAttachEx(
+NTSTATUS NTAPI DetourAttachEx(
     _Inout_ PVOID* ppPointer,
     _In_ PVOID pDetour,
     _Out_opt_ PDETOUR_TRAMPOLINE* ppRealTrampoline,
     _Out_opt_ PVOID* ppRealTarget,
     _Out_opt_ PVOID* ppRealDetour);
 
-LONG WINAPI DetourDetach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour);
+NTSTATUS NTAPI DetourDetach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour);
 
-PVOID WINAPI DetourCodeFromPointer(_In_ PVOID pPointer, _Out_opt_ PVOID* ppGlobals);
-PVOID WINAPI DetourCopyInstruction(
+PVOID NTAPI DetourCodeFromPointer(_In_ PVOID pPointer, _Out_opt_ PVOID* ppGlobals);
+PVOID NTAPI DetourCopyInstruction(
     _In_opt_ PVOID pDst,
     _Inout_opt_ PVOID* ppDstPool,
     _In_ PVOID pSrc,
@@ -75,13 +75,13 @@ struct DetoursIsFunctionPointer<T*> : std::is_function<typename std::remove_poin
 };
 
 template<typename T, typename std::enable_if<DetoursIsFunctionPointer<T>::value, int>::type = 0>
-LONG DetourAttach(_Inout_ T* ppPointer, _In_ T pDetour) noexcept
+NTSTATUS DetourAttach(_Inout_ T* ppPointer, _In_ T pDetour) noexcept
 {
     return DetourAttach(reinterpret_cast<void**>(ppPointer), reinterpret_cast<void*>(pDetour));
 }
 
 template<typename T, typename std::enable_if<DetoursIsFunctionPointer<T>::value, int>::type = 0>
-LONG DetourAttachEx(
+NTSTATUS DetourAttachEx(
     _Inout_ T* ppPointer,
     _In_ T pDetour,
     _Out_opt_ PDETOUR_TRAMPOLINE* ppRealTrampoline,
@@ -96,7 +96,7 @@ LONG DetourAttachEx(
 }
 
 template<typename T, typename std::enable_if<DetoursIsFunctionPointer<T>::value, int>::type = 0>
-LONG DetourDetach(_Inout_ T* ppPointer, _In_ T pDetour) noexcept
+NTSTATUS DetourDetach(_Inout_ T* ppPointer, _In_ T pDetour) noexcept
 {
     return DetourDetach(reinterpret_cast<void**>(ppPointer), reinterpret_cast<void*>(pDetour));
 }
