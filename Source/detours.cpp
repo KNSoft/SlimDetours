@@ -135,22 +135,35 @@ inline ULONG_PTR detour_2gb_above(ULONG_PTR address)
 #endif
 }
 
-#if defined(_M_IX86)
+#if defined(_M_IX86) || defined(_M_X64)
 
 struct _DETOUR_TRAMPOLINE
 {
-    BYTE            rbCode[30];     // target code + jmp to pbRemain
+    // An X64 instuction can be 15 bytes long.
+    // In practice 11 seems to be the limit.
+    BYTE            rbCode[30];     // target code + jmp to pbRemain.
     BYTE            cbCode;         // size of moved target code.
     BYTE            cbCodeBreak;    // padding to make debugging easier.
+#if defined(_M_X64)
+    BYTE            rbRestore[30];  // original target code.
+#else
     BYTE            rbRestore[22];  // original target code.
+#endif
     BYTE            cbRestore;      // size of original target code.
     BYTE            cbRestoreBreak; // padding to make debugging easier.
     _DETOUR_ALIGN   rAlign[8];      // instruction alignment array.
     PBYTE           pbRemain;       // first instruction after moved code. [free list]
     PBYTE           pbDetour;       // first instruction of detour function.
+#if defined(_M_X64)
+    BYTE            rbCodeIn[8];    // jmp [pbDetour]
+#endif
 };
 
+#if defined(_M_IX86)
 static_assert(sizeof(_DETOUR_TRAMPOLINE) == 72);
+#else
+static_assert(sizeof(_DETOUR_TRAMPOLINE) == 96);
+#endif
 
 enum
 {
@@ -167,9 +180,16 @@ inline PBYTE detour_gen_jmp_immediate(PBYTE pbCode, PBYTE pbJmpVal)
 
 inline PBYTE detour_gen_jmp_indirect(PBYTE pbCode, PBYTE* ppbJmpVal)
 {
+#if defined(_M_X64)
+    PBYTE pbJmpSrc = pbCode + 6;
+#endif
     *pbCode++ = 0xff;   // jmp [+imm32]
     *pbCode++ = 0x25;
+#if defined(_M_X64)
+    *((INT32*&)pbCode)++ = (INT32)((PBYTE)ppbJmpVal - pbJmpSrc);
+#else
     *((INT32*&)pbCode)++ = (INT32)((PBYTE)ppbJmpVal);
+#endif
     return pbCode;
 }
 
@@ -196,9 +216,15 @@ inline PBYTE detour_skip_jmp(PBYTE pbCode, PVOID* ppGlobals)
     // First, skip over the import vector if there is one.
     if (pbCode[0] == 0xff && pbCode[1] == 0x25)
     {
-        // jmp [imm32]
         // Looks like an import alias jump, then get the code it points to.
+#if defined(_M_IX86)
+        // jmp [imm32]
         PBYTE pbTarget = *(UNALIGNED PBYTE*) & pbCode[2];
+#else
+        // jmp [+imm32]
+        PBYTE pbTarget = pbCode + 6 + *(UNALIGNED INT32*) & pbCode[2];
+#endif
+
         if (detour_is_imported(pbCode, pbTarget))
         {
             PBYTE pbNew = *(UNALIGNED PBYTE*)pbTarget;
@@ -218,9 +244,14 @@ inline PBYTE detour_skip_jmp(PBYTE pbCode, PVOID* ppGlobals)
         // First, skip over the import vector if there is one.
         if (pbCode[0] == 0xff && pbCode[1] == 0x25)
         {
-            // jmp [imm32]
             // Looks like an import alias jump, then get the code it points to.
+#if defined(_M_IX86)
+            // jmp [imm32]
             PBYTE pbTarget = *(UNALIGNED PBYTE*) & pbCode[2];
+#else
+            // jmp [+imm32]
+            PBYTE pbTarget = pbCode + 6 + *(UNALIGNED INT32*) & pbCode[2];
+#endif
             if (detour_is_imported(pbCode, pbTarget))
             {
                 pbNew = *(UNALIGNED PBYTE*)pbTarget;
@@ -262,227 +293,9 @@ inline void detour_find_jmp_bounds(PBYTE pbCode, PDETOUR_TRAMPOLINE* ppLower, PD
         }
         DETOUR_TRACE("[%p..%p..%p] +imm32\n", (PVOID)lo, pbCode, (PVOID)hi);
     }
-
-    *ppLower = (PDETOUR_TRAMPOLINE)lo;
-    *ppUpper = (PDETOUR_TRAMPOLINE)hi;
-}
-
-inline BOOL detour_does_code_end_function(PBYTE pbCode)
-{
-    if (pbCode[0] == 0xeb ||    // jmp +imm8
-        pbCode[0] == 0xe9 ||    // jmp +imm32
-        pbCode[0] == 0xe0 ||    // jmp eax
-        pbCode[0] == 0xc2 ||    // ret +imm8
-        pbCode[0] == 0xc3 ||    // ret
-        pbCode[0] == 0xcc)
-    {
-        // brk
-        return TRUE;
-    } else if (pbCode[0] == 0xf3 && pbCode[1] == 0xc3)
-    {
-        // rep ret
-        return TRUE;
-    } else if (pbCode[0] == 0xff && pbCode[1] == 0x25)
-    {
-        // jmp [+imm32]
-        return TRUE;
-    } else if ((pbCode[0] == 0x26 ||      // jmp es:
-                pbCode[0] == 0x2e ||      // jmp cs:
-                pbCode[0] == 0x36 ||      // jmp ss:
-                pbCode[0] == 0x3e ||      // jmp ds:
-                pbCode[0] == 0x64 ||      // jmp fs:
-                pbCode[0] == 0x65) &&     // jmp gs:
-               pbCode[1] == 0xff &&       // jmp [+imm32]
-               pbCode[2] == 0x25)
-    {
-        return TRUE;
-    }
-    return FALSE;
-}
-
-inline ULONG detour_is_code_filler(PBYTE pbCode)
-{
-    // 1-byte through 11-byte NOPs.
-    if (pbCode[0] == 0x90)
-    {
-        return 1;
-    }
-    if (pbCode[0] == 0x66 && pbCode[1] == 0x90)
-    {
-        return 2;
-    }
-    if (pbCode[0] == 0x0F && pbCode[1] == 0x1F && pbCode[2] == 0x00)
-    {
-        return 3;
-    }
-    if (pbCode[0] == 0x0F && pbCode[1] == 0x1F && pbCode[2] == 0x40 && pbCode[3] == 0x00)
-    {
-        return 4;
-    }
-    if (pbCode[0] == 0x0F && pbCode[1] == 0x1F && pbCode[2] == 0x44 && pbCode[3] == 0x00 && pbCode[4] == 0x00)
-    {
-        return 5;
-    }
-    if (pbCode[0] == 0x66 && pbCode[1] == 0x0F && pbCode[2] == 0x1F && pbCode[3] == 0x44 && pbCode[4] == 0x00 &&
-        pbCode[5] == 0x00)
-    {
-        return 6;
-    }
-    if (pbCode[0] == 0x0F && pbCode[1] == 0x1F && pbCode[2] == 0x80 && pbCode[3] == 0x00 && pbCode[4] == 0x00 &&
-        pbCode[5] == 0x00 && pbCode[6] == 0x00)
-    {
-        return 7;
-    }
-    if (pbCode[0] == 0x0F && pbCode[1] == 0x1F && pbCode[2] == 0x84 && pbCode[3] == 0x00 && pbCode[4] == 0x00 &&
-        pbCode[5] == 0x00 && pbCode[6] == 0x00 && pbCode[7] == 0x00)
-    {
-        return 8;
-    }
-    if (pbCode[0] == 0x66 && pbCode[1] == 0x0F && pbCode[2] == 0x1F && pbCode[3] == 0x84 && pbCode[4] == 0x00 &&
-        pbCode[5] == 0x00 && pbCode[6] == 0x00 && pbCode[7] == 0x00 && pbCode[8] == 0x00)
-    {
-        return 9;
-    }
-    if (pbCode[0] == 0x66 && pbCode[1] == 0x66 && pbCode[2] == 0x0F && pbCode[3] == 0x1F && pbCode[4] == 0x84 &&
-        pbCode[5] == 0x00 && pbCode[6] == 0x00 && pbCode[7] == 0x00 && pbCode[8] == 0x00 && pbCode[9] == 0x00)
-    {
-        return 10;
-    }
-    if (pbCode[0] == 0x66 && pbCode[1] == 0x66 && pbCode[2] == 0x66 && pbCode[3] == 0x0F && pbCode[4] == 0x1F &&
-        pbCode[5] == 0x84 && pbCode[6] == 0x00 && pbCode[7] == 0x00 && pbCode[8] == 0x00 && pbCode[9] == 0x00 &&
-        pbCode[10] == 0x00)
-    {
-        return 11;
-    }
-
-    // int 3.
-    if (pbCode[0] == 0xCC)
-    {
-        return 1;
-    }
-    return 0;
-}
-
-#endif // defined(_M_IX86)
-
 #if defined(_M_X64)
-
-struct _DETOUR_TRAMPOLINE
-{
-    // An X64 instuction can be 15 bytes long.
-    // In practice 11 seems to be the limit.
-    BYTE            rbCode[30];     // target code + jmp to pbRemain.
-    BYTE            cbCode;         // size of moved target code.
-    BYTE            cbCodeBreak;    // padding to make debugging easier.
-    BYTE            rbRestore[30];  // original target code.
-    BYTE            cbRestore;      // size of original target code.
-    BYTE            cbRestoreBreak; // padding to make debugging easier.
-    _DETOUR_ALIGN   rAlign[8];      // instruction alignment array.
-    PBYTE           pbRemain;       // first instruction after moved code. [free list]
-    PBYTE           pbDetour;       // first instruction of detour function.
-    BYTE            rbCodeIn[8];    // jmp [pbDetour]
-};
-
-static_assert(sizeof(_DETOUR_TRAMPOLINE) == 96);
-
-enum
-{
-    SIZE_OF_JMP = 5
-};
-
-inline PBYTE detour_gen_jmp_immediate(PBYTE pbCode, PBYTE pbJmpVal)
-{
-    PBYTE pbJmpSrc = pbCode + 5;
-    *pbCode++ = 0xe9;   // jmp +imm32
-    *((INT32*&)pbCode)++ = (INT32)(pbJmpVal - pbJmpSrc);
-    return pbCode;
-}
-
-inline PBYTE detour_gen_jmp_indirect(PBYTE pbCode, PBYTE* ppbJmpVal)
-{
-    PBYTE pbJmpSrc = pbCode + 6;
-    *pbCode++ = 0xff;   // jmp [+imm32]
-    *pbCode++ = 0x25;
-    *((INT32*&)pbCode)++ = (INT32)((PBYTE)ppbJmpVal - pbJmpSrc);
-    return pbCode;
-}
-
-inline PBYTE detour_gen_brk(PBYTE pbCode, PBYTE pbLimit)
-{
-    while (pbCode < pbLimit)
-    {
-        *pbCode++ = 0xcc;   // brk;
-    }
-    return pbCode;
-}
-
-inline PBYTE detour_skip_jmp(PBYTE pbCode, PVOID* ppGlobals)
-{
-    if (pbCode == NULL)
-    {
-        return NULL;
-    }
-    if (ppGlobals != NULL)
-    {
-        *ppGlobals = NULL;
-    }
-
-    // First, skip over the import vector if there is one.
-    if (pbCode[0] == 0xff && pbCode[1] == 0x25)
-    {
-        // jmp [+imm32]
-        // Looks like an import alias jump, then get the code it points to.
-        PBYTE pbTarget = pbCode + 6 + *(UNALIGNED INT32*) & pbCode[2];
-        if (detour_is_imported(pbCode, pbTarget))
-        {
-            PBYTE pbNew = *(UNALIGNED PBYTE*)pbTarget;
-            DETOUR_TRACE("%p->%p: skipped over import table.\n", pbCode, pbNew);
-            pbCode = pbNew;
-        }
-    }
-
-    // Then, skip over a patch jump
-    if (pbCode[0] == 0xeb)
-    {
-        // jmp +imm8
-        PBYTE pbNew = pbCode + 2 + *(CHAR*)&pbCode[1];
-        DETOUR_TRACE("%p->%p: skipped over short jump.\n", pbCode, pbNew);
-        pbCode = pbNew;
-
-        // First, skip over the import vector if there is one.
-        if (pbCode[0] == 0xff && pbCode[1] == 0x25)
-        {
-            // jmp [+imm32]
-            // Looks like an import alias jump, then get the code it points to.
-            PBYTE pbTarget = pbCode + 6 + *(UNALIGNED INT32*) & pbCode[2];
-            if (detour_is_imported(pbCode, pbTarget))
-            {
-                pbNew = *(UNALIGNED PBYTE*)pbTarget;
-                DETOUR_TRACE("%p->%p: skipped over import table.\n", pbCode, pbNew);
-                pbCode = pbNew;
-            }
-        }
-        // Finally, skip over a long jump if it is the target of the patch jump.
-        else if (pbCode[0] == 0xe9)
-        {
-            // jmp +imm32
-            pbNew = pbCode + 5 + *(UNALIGNED INT32*) & pbCode[1];
-            DETOUR_TRACE("%p->%p: skipped over long jump.\n", pbCode, pbNew);
-            pbCode = pbNew;
-        }
-    }
-    return pbCode;
-}
-
-inline void detour_find_jmp_bounds(PBYTE pbCode, PDETOUR_TRAMPOLINE* ppLower, PDETOUR_TRAMPOLINE* ppUpper)
-{
-    // We have to place trampolines within +/- 2GB of code.
-    ULONG_PTR lo = detour_2gb_below((ULONG_PTR)pbCode);
-    ULONG_PTR hi = detour_2gb_above((ULONG_PTR)pbCode);
-    DETOUR_TRACE("[%p..%p..%p]\n", (PVOID)lo, pbCode, (PVOID)hi);
-
     // And, within +/- 2GB of relative jmp vectors.
-    if (pbCode[0] == 0xff && pbCode[1] == 0x25)
+    else if (pbCode[0] == 0xff && pbCode[1] == 0x25)
     {
         // jmp [+imm32]
         PBYTE pbNew = pbCode + 6 + *(UNALIGNED INT32*) & pbCode[2];
@@ -496,21 +309,7 @@ inline void detour_find_jmp_bounds(PBYTE pbCode, PDETOUR_TRAMPOLINE* ppLower, PD
         }
         DETOUR_TRACE("[%p..%p..%p] [+imm32]\n", (PVOID)lo, pbCode, (PVOID)hi);
     }
-    // And, within +/- 2GB of relative jmp targets.
-    else if (pbCode[0] == 0xe9)
-    {
-        // jmp +imm32
-        PBYTE pbNew = pbCode + 5 + *(UNALIGNED INT32*) & pbCode[1];
-
-        if (pbNew < pbCode)
-        {
-            hi = detour_2gb_above((ULONG_PTR)pbNew);
-        } else
-        {
-            lo = detour_2gb_below((ULONG_PTR)pbNew);
-        }
-        DETOUR_TRACE("[%p..%p..%p] +imm32\n", (PVOID)lo, pbCode, (PVOID)hi);
-    }
+#endif
 
     *ppLower = (PDETOUR_TRAMPOLINE)lo;
     *ppUpper = (PDETOUR_TRAMPOLINE)hi;
@@ -612,7 +411,7 @@ inline ULONG detour_is_code_filler(PBYTE pbCode)
     return 0;
 }
 
-#endif // defined(_M_X64)
+#endif // defined(_M_IX86) || defined(_M_X64)
 
 #if defined(_M_ARM64)
 
@@ -1513,20 +1312,14 @@ NTSTATUS NTAPI DetourTransactionCommitEx(_Out_opt_ PVOID** pppFailedPointer)
 #if defined(_M_X64)
             detour_gen_jmp_indirect(o->pTrampoline->rbCodeIn, &o->pTrampoline->pbDetour);
             PBYTE pbCode = detour_gen_jmp_immediate(o->pbTarget, o->pTrampoline->rbCodeIn);
-            pbCode = detour_gen_brk(pbCode, o->pTrampoline->pbRemain);
-            *o->ppbPointer = o->pTrampoline->rbCode;
-            UNREFERENCED_PARAMETER(pbCode);
 #elif defined(_M_IX86)
             PBYTE pbCode = detour_gen_jmp_immediate(o->pbTarget, o->pTrampoline->pbDetour);
-            pbCode = detour_gen_brk(pbCode, o->pTrampoline->pbRemain);
-            *o->ppbPointer = o->pTrampoline->rbCode;
-            UNREFERENCED_PARAMETER(pbCode);
 #elif defined(_M_ARM64)
             PBYTE pbCode = detour_gen_jmp_indirect(o->pbTarget, (ULONG64*)&(o->pTrampoline->pbDetour));
+#endif
             pbCode = detour_gen_brk(pbCode, o->pTrampoline->pbRemain);
             *o->ppbPointer = o->pTrampoline->rbCode;
             UNREFERENCED_PARAMETER(pbCode);
-#endif
 
             DETOUR_TRACE("detours: pbTarget=%p: "
                          "%02x %02x %02x %02x "
@@ -1944,15 +1737,12 @@ stop:
     pbTrampoline = pTrampoline->rbCode + pTrampoline->cbCode;
 #if defined(_M_X64)
     pbTrampoline = detour_gen_jmp_indirect(pbTrampoline, &pTrampoline->pbRemain);
-    pbTrampoline = detour_gen_brk(pbTrampoline, pbPool);
 #elif defined(_M_IX86)
     pbTrampoline = detour_gen_jmp_immediate(pbTrampoline, pTrampoline->pbRemain);
-    pbTrampoline = detour_gen_brk(pbTrampoline, pbPool);
 #elif defined(_M_ARM64)
     pbTrampoline = detour_gen_jmp_immediate(pbTrampoline, &pbPool, pTrampoline->pbRemain);
-    pbTrampoline = detour_gen_brk(pbTrampoline, pbPool);
 #endif
-
+    pbTrampoline = detour_gen_brk(pbTrampoline, pbPool);
     UNREFERENCED_PARAMETER(pbTrampoline);
 
     pMem = pbTarget;

@@ -71,6 +71,6 @@ cpp_space_after_semicolon = true
 cpp_space_remove_around_unary_operator = true
 cpp_space_around_binary_operator = insert
 cpp_space_around_assignment_operator = insert
-cpp_space_pointer_reference_alignment = ignpre
+cpp_space_pointer_reference_alignment = ignore
 cpp_space_around_ternary_operator = insert
 cpp_wrap_preserve_blocks = never
