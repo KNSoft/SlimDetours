@@ -58,14 +58,14 @@ static bool detour_is_imported(PBYTE pbCode, PBYTE pbAddress)
     }
 
     /*
-     * pBase should >= MM_ALLOCATION_GRANULARITY and sSize should >= PAGE_SIZE,
-     * PAGE_SIZE always >= sizeof(IMAGE_DOS_HEADER) so we can access IMAGE_DOS_HEADER safely without boundary check.
+     * RegionSize should >= PAGE_SIZE and PAGE_SIZE always >= sizeof(IMAGE_DOS_HEADER),
+     * so we can access IMAGE_DOS_HEADER safely without boundary check.
      */
-    if ((ULONG_PTR)mbi.AllocationBase < MM_ALLOCATION_GRANULARITY || mbi.RegionSize < PAGE_SIZE)
+    static_assert(PAGE_SIZE >= sizeof(IMAGE_DOS_HEADER));
+    if (mbi.RegionSize < PAGE_SIZE)
     {
         return false;
     }
-    static_assert(PAGE_SIZE >= sizeof(IMAGE_DOS_HEADER));
 
     /* Check IMAGE_DOS_HEADER */
     pDosHeader = (PIMAGE_DOS_HEADER)mbi.AllocationBase;
@@ -137,7 +137,7 @@ inline ULONG_PTR detour_2gb_above(ULONG_PTR address)
 
 #if defined(_M_IX86) || defined(_M_X64)
 
-struct _DETOUR_TRAMPOLINE
+typedef struct _DETOUR_TRAMPOLINE
 {
     // An X64 instuction can be 15 bytes long.
     // In practice 11 seems to be the limit.
@@ -157,7 +157,7 @@ struct _DETOUR_TRAMPOLINE
 #if defined(_M_X64)
     BYTE            rbCodeIn[8];    // jmp [pbDetour]
 #endif
-};
+} DETOUR_TRAMPOLINE, *PDETOUR_TRAMPOLINE;
 
 #if defined(_M_IX86)
 static_assert(sizeof(_DETOUR_TRAMPOLINE) == 72);
@@ -202,17 +202,8 @@ inline PBYTE detour_gen_brk(PBYTE pbCode, PBYTE pbLimit)
     return pbCode;
 }
 
-inline PBYTE detour_skip_jmp(PBYTE pbCode, PVOID* ppGlobals)
+inline PBYTE detour_skip_jmp(_In_ PBYTE pbCode)
 {
-    if (pbCode == NULL)
-    {
-        return NULL;
-    }
-    if (ppGlobals != NULL)
-    {
-        *ppGlobals = NULL;
-    }
-
     // First, skip over the import vector if there is one.
     if (pbCode[0] == 0xff && pbCode[1] == 0x25)
     {
@@ -415,7 +406,7 @@ inline ULONG detour_is_code_filler(PBYTE pbCode)
 
 #if defined(_M_ARM64)
 
-struct _DETOUR_TRAMPOLINE
+typedef struct _DETOUR_TRAMPOLINE
 {
     // An ARM64 instruction is 4 bytes long.
     //
@@ -450,7 +441,7 @@ struct _DETOUR_TRAMPOLINE
     _DETOUR_ALIGN   rAlign[8];          // instruction alignment array.
     PBYTE           pbRemain;           // first instruction after moved code. [free list]
     PBYTE           pbDetour;           // first instruction of detour function.
-};
+} DETOUR_TRAMPOLINE, *PDETOUR_TRAMPOLINE;
 
 static_assert(sizeof(_DETOUR_TRAMPOLINE) == 184);
 
@@ -586,17 +577,8 @@ inline INT64 detour_sign_extend(UINT64 value, UINT bits)
     return value | sign;
 }
 
-inline PBYTE detour_skip_jmp(PBYTE pbCode, PVOID* ppGlobals)
+inline PBYTE detour_skip_jmp(_In_ PBYTE pbCode)
 {
-    if (pbCode == NULL)
-    {
-        return NULL;
-    }
-    if (ppGlobals != NULL)
-    {
-        *ppGlobals = NULL;
-    }
-
     // Skip over the import jump if there is one.
     pbCode = (PBYTE)pbCode;
     ULONG Opcode = fetch_opcode(pbCode);
@@ -1131,48 +1113,41 @@ struct DetourOperation
     ULONG dwPerm;
 };
 
-static BOOL s_fIgnoreTooSmall = FALSE;
-static BOOL s_fRetainRegions = FALSE;
-
 static ULONG s_nPendingThreadId = 0; // Thread owning pending transaction.
-static NTSTATUS s_nPendingError = STATUS_SUCCESS;
-static PVOID* s_ppPendingError = NULL;
 static DetourThread* s_pPendingThreads = NULL;
 static DetourOperation* s_pPendingOperations = NULL;
 
 //////////////////////////////////////////////////////////////////////////////
 //
-PVOID NTAPI SlimDetoursCodeFromPointer(_In_ PVOID pPointer, _Out_opt_ PVOID* ppGlobals)
+PVOID NTAPI SlimDetoursCodeFromPointer(_In_ PVOID pPointer)
 {
-    return detour_skip_jmp((PBYTE)pPointer, ppGlobals);
+    return detour_skip_jmp((PBYTE)pPointer);
 }
 
 //////////////////////////////////////////////////////////// Transaction APIs.
 //
 NTSTATUS NTAPI SlimDetoursTransactionBegin()
 {
-    // Only one transaction is allowed at a time.
-    _Benign_race_begin_
-        if (s_nPendingThreadId != 0)
-        {
-            return STATUS_TRANSACTIONAL_CONFLICT;
-        }
-    _Benign_race_end_
+    NTSTATUS Status;
 
-        // Make sure only one thread can start a transaction.
-        if (_InterlockedCompareExchange(&s_nPendingThreadId, CURRENT_THREAD_ID, 0) != 0)
-        {
-            return STATUS_TRANSACTIONAL_CONFLICT;
-        }
+    // Make sure only one thread can start a transaction.
+    if (_InterlockedCompareExchange(&s_nPendingThreadId, CURRENT_THREAD_ID, 0) != 0)
+    {
+        return STATUS_TRANSACTIONAL_CONFLICT;
+    }
 
     s_pPendingOperations = NULL;
     s_pPendingThreads = NULL;
-    s_ppPendingError = NULL;
 
     // Make sure the trampoline pages are writable.
-    s_nPendingError = detour_writable_trampoline_regions();
-
-    return s_nPendingError;
+    Status = detour_writable_trampoline_regions();
+    if (!NT_SUCCESS(Status))
+    {
+#pragma warning(disable: __WARNING_INTERLOCKED_ACCESS)
+        s_nPendingThreadId = 0;
+#pragma warning(default: __WARNING_INTERLOCKED_ACCESS)
+    }
+    return Status;
 }
 
 NTSTATUS NTAPI SlimDetoursTransactionAbort()
@@ -1227,11 +1202,6 @@ NTSTATUS NTAPI SlimDetoursTransactionAbort()
     return STATUS_SUCCESS;
 }
 
-NTSTATUS NTAPI SlimDetoursTransactionCommit()
-{
-    return SlimDetoursTransactionCommitEx(NULL);
-}
-
 static BYTE detour_align_from_trampoline(PDETOUR_TRAMPOLINE pTrampoline, BYTE obTrampoline)
 {
     for (LONG n = 0; n < ARRAYSIZE(pTrampoline->rAlign); n++)
@@ -1256,7 +1226,7 @@ static LONG detour_align_from_target(PDETOUR_TRAMPOLINE pTrampoline, LONG obTarg
     return 0;
 }
 
-NTSTATUS NTAPI SlimDetoursTransactionCommitEx(_Out_opt_ PVOID** pppFailedPointer)
+NTSTATUS NTAPI SlimDetoursTransactionCommit()
 {
     PVOID pMem;
     SIZE_T sMem;
@@ -1267,22 +1237,9 @@ NTSTATUS NTAPI SlimDetoursTransactionCommitEx(_Out_opt_ PVOID** pppFailedPointer
     DetourThread* t;
     BOOL freed = FALSE;
 
-    if (pppFailedPointer != NULL)
-    {
-        // Used to get the last error.
-        *pppFailedPointer = s_ppPendingError;
-    }
     if (s_nPendingThreadId != CURRENT_THREAD_ID)
     {
         return STATUS_TRANSACTIONAL_CONFLICT;
-    }
-
-    // If any of the pending operations failed, then we abort the whole transaction.
-    if (s_nPendingError != STATUS_SUCCESS)
-    {
-        DETOUR_BREAK();
-        SlimDetoursTransactionAbort();
-        return s_nPendingError;
     }
 
     // Insert or remove each of the detours.
@@ -1416,7 +1373,7 @@ NTSTATUS NTAPI SlimDetoursTransactionCommitEx(_Out_opt_ PVOID** pppFailedPointer
     s_pPendingOperations = NULL;
 
     // Free any trampoline regions that are now unused.
-    if (freed && !s_fRetainRegions)
+    if (freed)
     {
         detour_free_unused_trampoline_regions();
     }
@@ -1437,23 +1394,12 @@ NTSTATUS NTAPI SlimDetoursTransactionCommitEx(_Out_opt_ PVOID** pppFailedPointer
     s_pPendingThreads = NULL;
     s_nPendingThreadId = 0;
 
-    if (pppFailedPointer != NULL)
-    {
-        *pppFailedPointer = s_ppPendingError;
-    }
-
-    return s_nPendingError;
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS NTAPI SlimDetoursUpdateThread(_In_ HANDLE hThread)
 {
     NTSTATUS Status;
-
-    // If any of the pending operations failed, then we don't need to do this.
-    if (s_nPendingError != STATUS_SUCCESS)
-    {
-        return s_nPendingError;
-    }
 
     // Silently (and safely) drop any attempt to suspend our own thread.
     if (hThread == NtCurrentThread())
@@ -1471,8 +1417,6 @@ fail:
             delete t;
             t = NULL;
         }
-        s_nPendingError = Status;
-        s_ppPendingError = NULL;
         DETOUR_BREAK();
         return Status;
     }
@@ -1495,38 +1439,10 @@ fail:
 //
 NTSTATUS NTAPI SlimDetoursAttach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour)
 {
-    return SlimDetoursAttachEx(ppPointer, pDetour, NULL, NULL, NULL);
-}
-
-NTSTATUS NTAPI SlimDetoursAttachEx(
-    _Inout_ PVOID* ppPointer,
-    _In_ PVOID pDetour,
-    _Out_opt_ PDETOUR_TRAMPOLINE* ppRealTrampoline,
-    _Out_opt_ PVOID* ppRealTarget,
-    _Out_opt_ PVOID* ppRealDetour)
-{
     NTSTATUS Status = STATUS_SUCCESS;
     PVOID pMem;
     SIZE_T sMem;
     DWORD dwOld;
-
-    if (ppRealTrampoline != NULL)
-    {
-        *ppRealTrampoline = NULL;
-    }
-    if (ppRealTarget != NULL)
-    {
-        *ppRealTarget = NULL;
-    }
-    if (ppRealDetour != NULL)
-    {
-        *ppRealDetour = NULL;
-    }
-    if (pDetour == NULL)
-    {
-        DETOUR_TRACE("empty detour\n");
-        return STATUS_INVALID_PARAMETER;
-    }
 
     if (s_nPendingThreadId != CURRENT_THREAD_ID)
     {
@@ -1534,56 +1450,19 @@ NTSTATUS NTAPI SlimDetoursAttachEx(
         return STATUS_TRANSACTIONAL_CONFLICT;
     }
 
-    // If any of the pending operations failed, then we don't need to do this.
-    if (s_nPendingError != STATUS_SUCCESS)
-    {
-        DETOUR_TRACE("pending transaction error=%ld\n", s_nPendingError);
-        return s_nPendingError;
-    }
-
-    if (ppPointer == NULL)
-    {
-        DETOUR_TRACE("ppPointer is null\n");
-        return STATUS_INVALID_HANDLE;
-    }
-    if (*ppPointer == NULL)
-    {
-        Status = STATUS_INVALID_HANDLE;
-        s_nPendingError = Status;
-        s_ppPendingError = ppPointer;
-        DETOUR_TRACE("*ppPointer is null (ppPointer=%p)\n", ppPointer);
-        DETOUR_BREAK();
-        return Status;
-    }
-
     PBYTE pbTarget = (PBYTE)*ppPointer;
     PDETOUR_TRAMPOLINE pTrampoline = NULL;
     DetourOperation* o = NULL;
 
-    pbTarget = (PBYTE)SlimDetoursCodeFromPointer(pbTarget, NULL);
-    pDetour = SlimDetoursCodeFromPointer(pDetour, NULL);
+    pbTarget = (PBYTE)detour_skip_jmp(pbTarget);
+    pDetour = detour_skip_jmp((PBYTE)pDetour);
 
     // Don't follow a jump if its destination is the target function.
     // This happens when the detour does nothing other than call the target.
     if (pDetour == (PVOID)pbTarget)
     {
-        if (s_fIgnoreTooSmall)
-        {
-            goto stop;
-        } else
-        {
-            DETOUR_BREAK();
-            goto fail;
-        }
-    }
-
-    if (ppRealTarget != NULL)
-    {
-        *ppRealTarget = pbTarget;
-    }
-    if (ppRealDetour != NULL)
-    {
-        *ppRealDetour = pDetour;
+        DETOUR_BREAK();
+        goto fail;
     }
 
     o = new(std::nothrow) DetourOperation;
@@ -1591,32 +1470,18 @@ NTSTATUS NTAPI SlimDetoursAttachEx(
     {
         Status = STATUS_NO_MEMORY;
 fail:
-        s_nPendingError = Status;
         DETOUR_BREAK();
-stop:
         if (pTrampoline != NULL)
         {
             detour_free_trampoline(pTrampoline);
             pTrampoline = NULL;
-            if (ppRealTrampoline != NULL)
-            {
-                *ppRealTrampoline = NULL;
-            }
         }
         if (o != NULL)
         {
             delete o;
             o = NULL;
         }
-        if (ppRealDetour != NULL)
-        {
-            *ppRealDetour = NULL;
-        }
-        if (ppRealTarget != NULL)
-        {
-            *ppRealTarget = NULL;
-        }
-        s_ppPendingError = ppPointer;
+        SlimDetoursTransactionAbort();
         return Status;
     }
 
@@ -1626,11 +1491,6 @@ stop:
         Status = STATUS_NO_MEMORY;
         DETOUR_BREAK();
         goto fail;
-    }
-
-    if (ppRealTrampoline != NULL)
-    {
-        *ppRealTrampoline = pTrampoline;
     }
 
     DETOUR_TRACE("detours: pbTramp=%p, pDetour=%p\n", pTrampoline, pDetour);
@@ -1704,14 +1564,8 @@ stop:
     {
         // Too few instructions.
         Status = STATUS_INVALID_BLOCK_LENGTH;
-        if (s_fIgnoreTooSmall)
-        {
-            goto stop;
-        } else
-        {
-            DETOUR_BREAK();
-            goto fail;
-        }
+        DETOUR_BREAK();
+        goto fail;
     }
 
     if (pbTrampoline > pbPool)
@@ -1797,77 +1651,33 @@ NTSTATUS NTAPI SlimDetoursDetach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour)
         return STATUS_TRANSACTIONAL_CONFLICT;
     }
 
-    // If any of the pending operations failed, then we don't need to do this.
-    if (s_nPendingError != STATUS_SUCCESS)
-    {
-        return s_nPendingError;
-    }
-
-    if (pDetour == NULL)
-    {
-        return STATUS_INVALID_PARAMETER;
-    }
-    if (ppPointer == NULL)
-    {
-        return STATUS_INVALID_HANDLE;
-    }
-    if (*ppPointer == NULL)
-    {
-        Status = STATUS_INVALID_HANDLE;
-        s_nPendingError = Status;
-        s_ppPendingError = ppPointer;
-        DETOUR_BREAK();
-        return Status;
-    }
-
     DetourOperation* o = new(std::nothrow) DetourOperation;
     if (o == NULL)
     {
         Status = STATUS_NO_MEMORY;
 fail:
-        s_nPendingError = Status;
         DETOUR_BREAK();
-stop:
         if (o != NULL)
         {
             delete o;
             o = NULL;
         }
-        s_ppPendingError = ppPointer;
+        SlimDetoursTransactionAbort();
         return Status;
     }
 
-    PDETOUR_TRAMPOLINE pTrampoline = (PDETOUR_TRAMPOLINE)SlimDetoursCodeFromPointer(*ppPointer, NULL);
-    pDetour = SlimDetoursCodeFromPointer(pDetour, NULL);
+    PDETOUR_TRAMPOLINE pTrampoline = (PDETOUR_TRAMPOLINE)detour_skip_jmp((PBYTE)*ppPointer);
+    pDetour = detour_skip_jmp((PBYTE)pDetour);
 
     ////////////////////////////////////// Verify that Trampoline is in place.
     //
     LONG cbTarget = pTrampoline->cbRestore;
     PBYTE pbTarget = pTrampoline->pbRemain - cbTarget;
-    if (cbTarget == 0 || cbTarget > sizeof(pTrampoline->rbCode))
+    if (cbTarget == 0 || cbTarget > sizeof(pTrampoline->rbCode) || pTrampoline->pbDetour != pDetour)
     {
         Status = STATUS_INVALID_BLOCK_LENGTH;
-        if (s_fIgnoreTooSmall)
-        {
-            goto stop;
-        } else
-        {
-            DETOUR_BREAK();
-            goto fail;
-        }
-    }
-
-    if (pTrampoline->pbDetour != pDetour)
-    {
-        Status = STATUS_INVALID_BLOCK_LENGTH;
-        if (s_fIgnoreTooSmall)
-        {
-            goto stop;
-        } else
-        {
-            DETOUR_BREAK();
-            goto fail;
-        }
+        DETOUR_BREAK();
+        goto fail;
     }
 
     pMem = pbTarget;

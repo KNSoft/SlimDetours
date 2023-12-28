@@ -23,8 +23,6 @@
 #define DETOUR_INSTRUCTION_TARGET_NONE ((PVOID)0)
 #define DETOUR_INSTRUCTION_TARGET_DYNAMIC ((PVOID)(LONG_PTR)-1)
 
-typedef struct _DETOUR_TRAMPOLINE DETOUR_TRAMPOLINE, *PDETOUR_TRAMPOLINE;
-
 #pragma region APIs
 
 EXTERN_C_START
@@ -32,22 +30,13 @@ EXTERN_C_START
 NTSTATUS NTAPI SlimDetoursTransactionBegin();
 NTSTATUS NTAPI SlimDetoursTransactionAbort();
 NTSTATUS NTAPI SlimDetoursTransactionCommit();
-NTSTATUS NTAPI SlimDetoursTransactionCommitEx(_Out_opt_ PVOID** pppFailedPointer);
 
 NTSTATUS NTAPI SlimDetoursUpdateThread(_In_ HANDLE hThread);
 
 NTSTATUS NTAPI SlimDetoursAttach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour);
-
-NTSTATUS NTAPI SlimDetoursAttachEx(
-    _Inout_ PVOID* ppPointer,
-    _In_ PVOID pDetour,
-    _Out_opt_ PDETOUR_TRAMPOLINE* ppRealTrampoline,
-    _Out_opt_ PVOID* ppRealTarget,
-    _Out_opt_ PVOID* ppRealDetour);
-
 NTSTATUS NTAPI SlimDetoursDetach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour);
 
-PVOID NTAPI SlimDetoursCodeFromPointer(_In_ PVOID pPointer, _Out_opt_ PVOID* ppGlobals);
+PVOID NTAPI SlimDetoursCodeFromPointer(_In_ PVOID pPointer);
 PVOID NTAPI SlimDetoursCopyInstruction(
     _In_opt_ PVOID pDst,
     _Inout_opt_ PVOID* ppDstPool,
@@ -78,21 +67,6 @@ template<typename T, typename std::enable_if<SlimDetoursIsFunctionPointer<T>::va
 NTSTATUS SlimDetoursAttach(_Inout_ T* ppPointer, _In_ T pDetour) noexcept
 {
     return SlimDetoursAttach(reinterpret_cast<void**>(ppPointer), reinterpret_cast<void*>(pDetour));
-}
-
-template<typename T, typename std::enable_if<SlimDetoursIsFunctionPointer<T>::value, int>::type = 0>
-NTSTATUS SlimDetoursAttachEx(
-    _Inout_ T* ppPointer,
-    _In_ T pDetour,
-    _Out_opt_ PDETOUR_TRAMPOLINE* ppRealTrampoline,
-    _Out_opt_ T* ppRealTarget,
-    _Out_opt_ T* ppRealDetour) noexcept
-{
-    return SlimDetoursAttachEx(reinterpret_cast<void**>(ppPointer),
-                               reinterpret_cast<void*>(pDetour),
-                               ppRealTrampoline,
-                               reinterpret_cast<void**>(ppRealTarget),
-                               reinterpret_cast<void**>(ppRealDetour));
 }
 
 template<typename T, typename std::enable_if<SlimDetoursIsFunctionPointer<T>::value, int>::type = 0>
