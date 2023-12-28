@@ -10,8 +10,8 @@
  * Licensed under the MIT license.
  */
 
-#include "pch.h"
-#include "detours.h"
+#include "SlimDetours.inl"
+#include "SlimDetours.h"
 
 struct _DETOUR_ALIGN
 {
@@ -1142,14 +1142,14 @@ static DetourOperation* s_pPendingOperations = NULL;
 
 //////////////////////////////////////////////////////////////////////////////
 //
-PVOID NTAPI DetourCodeFromPointer(_In_ PVOID pPointer, _Out_opt_ PVOID* ppGlobals)
+PVOID NTAPI SlimDetoursCodeFromPointer(_In_ PVOID pPointer, _Out_opt_ PVOID* ppGlobals)
 {
     return detour_skip_jmp((PBYTE)pPointer, ppGlobals);
 }
 
 //////////////////////////////////////////////////////////// Transaction APIs.
 //
-NTSTATUS NTAPI DetourTransactionBegin()
+NTSTATUS NTAPI SlimDetoursTransactionBegin()
 {
     // Only one transaction is allowed at a time.
     _Benign_race_begin_
@@ -1175,7 +1175,7 @@ NTSTATUS NTAPI DetourTransactionBegin()
     return s_nPendingError;
 }
 
-NTSTATUS NTAPI DetourTransactionAbort()
+NTSTATUS NTAPI SlimDetoursTransactionAbort()
 {
     PVOID pMem;
     SIZE_T sMem;
@@ -1227,9 +1227,9 @@ NTSTATUS NTAPI DetourTransactionAbort()
     return STATUS_SUCCESS;
 }
 
-NTSTATUS NTAPI DetourTransactionCommit()
+NTSTATUS NTAPI SlimDetoursTransactionCommit()
 {
-    return DetourTransactionCommitEx(NULL);
+    return SlimDetoursTransactionCommitEx(NULL);
 }
 
 static BYTE detour_align_from_trampoline(PDETOUR_TRAMPOLINE pTrampoline, BYTE obTrampoline)
@@ -1256,7 +1256,7 @@ static LONG detour_align_from_target(PDETOUR_TRAMPOLINE pTrampoline, LONG obTarg
     return 0;
 }
 
-NTSTATUS NTAPI DetourTransactionCommitEx(_Out_opt_ PVOID** pppFailedPointer)
+NTSTATUS NTAPI SlimDetoursTransactionCommitEx(_Out_opt_ PVOID** pppFailedPointer)
 {
     PVOID pMem;
     SIZE_T sMem;
@@ -1281,7 +1281,7 @@ NTSTATUS NTAPI DetourTransactionCommitEx(_Out_opt_ PVOID** pppFailedPointer)
     if (s_nPendingError != STATUS_SUCCESS)
     {
         DETOUR_BREAK();
-        DetourTransactionAbort();
+        SlimDetoursTransactionAbort();
         return s_nPendingError;
     }
 
@@ -1445,7 +1445,7 @@ NTSTATUS NTAPI DetourTransactionCommitEx(_Out_opt_ PVOID** pppFailedPointer)
     return s_nPendingError;
 }
 
-NTSTATUS NTAPI DetourUpdateThread(_In_ HANDLE hThread)
+NTSTATUS NTAPI SlimDetoursUpdateThread(_In_ HANDLE hThread)
 {
     NTSTATUS Status;
 
@@ -1493,12 +1493,12 @@ fail:
 
 ///////////////////////////////////////////////////////////// Transacted APIs.
 //
-NTSTATUS NTAPI DetourAttach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour)
+NTSTATUS NTAPI SlimDetoursAttach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour)
 {
-    return DetourAttachEx(ppPointer, pDetour, NULL, NULL, NULL);
+    return SlimDetoursAttachEx(ppPointer, pDetour, NULL, NULL, NULL);
 }
 
-NTSTATUS NTAPI DetourAttachEx(
+NTSTATUS NTAPI SlimDetoursAttachEx(
     _Inout_ PVOID* ppPointer,
     _In_ PVOID pDetour,
     _Out_opt_ PDETOUR_TRAMPOLINE* ppRealTrampoline,
@@ -1560,8 +1560,8 @@ NTSTATUS NTAPI DetourAttachEx(
     PDETOUR_TRAMPOLINE pTrampoline = NULL;
     DetourOperation* o = NULL;
 
-    pbTarget = (PBYTE)DetourCodeFromPointer(pbTarget, NULL);
-    pDetour = DetourCodeFromPointer(pDetour, NULL);
+    pbTarget = (PBYTE)SlimDetoursCodeFromPointer(pbTarget, NULL);
+    pDetour = SlimDetoursCodeFromPointer(pDetour, NULL);
 
     // Don't follow a jump if its destination is the target function.
     // This happens when the detour does nothing other than call the target.
@@ -1650,9 +1650,9 @@ stop:
         PBYTE pbOp = pbSrc;
         LONG lExtra = 0;
 
-        DETOUR_TRACE(" DetourCopyInstruction(%p,%p)\n", pbTrampoline, pbSrc);
-        pbSrc = (PBYTE)DetourCopyInstruction(pbTrampoline, (PVOID*)&pbPool, pbSrc, NULL, &lExtra);
-        DETOUR_TRACE(" DetourCopyInstruction() = %p (%d bytes)\n", pbSrc, (int)(pbSrc - pbOp));
+        DETOUR_TRACE(" SlimDetoursCopyInstruction(%p,%p)\n", pbTrampoline, pbSrc);
+        pbSrc = (PBYTE)SlimDetoursCopyInstruction(pbTrampoline, (PVOID*)&pbPool, pbSrc, NULL, &lExtra);
+        DETOUR_TRACE(" SlimDetoursCopyInstruction() = %p (%d bytes)\n", pbSrc, (int)(pbSrc - pbOp));
         pbTrampoline += (pbSrc - pbOp) + lExtra;
         cbTarget = PtrOffset(pbTarget, pbSrc);
         pTrampoline->rAlign[nAlign].obTarget = cbTarget;
@@ -1785,7 +1785,7 @@ stop:
     return STATUS_SUCCESS;
 }
 
-NTSTATUS NTAPI DetourDetach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour)
+NTSTATUS NTAPI SlimDetoursDetach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour)
 {
     NTSTATUS Status = STATUS_SUCCESS;
     PVOID pMem;
@@ -1837,8 +1837,8 @@ stop:
         return Status;
     }
 
-    PDETOUR_TRAMPOLINE pTrampoline = (PDETOUR_TRAMPOLINE)DetourCodeFromPointer(*ppPointer, NULL);
-    pDetour = DetourCodeFromPointer(pDetour, NULL);
+    PDETOUR_TRAMPOLINE pTrampoline = (PDETOUR_TRAMPOLINE)SlimDetoursCodeFromPointer(*ppPointer, NULL);
+    pDetour = SlimDetoursCodeFromPointer(pDetour, NULL);
 
     ////////////////////////////////////// Verify that Trampoline is in place.
     //

@@ -1,0 +1,13 @@
+/x64
+/x86
+/ARM64
+
+/SlimDetours/x64
+/SlimDetours/x86
+/SlimDetours/ARM64
+
+/Test/x64
+/Test/x86
+/Test/ARM64
+
+/packages

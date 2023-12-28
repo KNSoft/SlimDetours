@@ -1,8 +1,2 @@
 .vs
 *.user
-
-/Source/x64
-/Source/x86
-/Source/ARM64
-
-/Source/packages

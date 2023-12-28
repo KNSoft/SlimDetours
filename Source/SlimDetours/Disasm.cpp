@@ -10,8 +10,8 @@
  * Licensed under the MIT license.
  */
 
-#include "pch.h"
-#include "detours.h"
+#include "SlimDetours.inl"
+#include "SlimDetours.h"
 
 #undef ASSERT
 #define ASSERT(x)
@@ -19,18 +19,18 @@
 //////////////////////////////////////////////////////////////////////////////
 //
 //  Function:
-//      DetourCopyInstruction(PVOID pDst,
-//                            PVOID *ppDstPool
-//                            PVOID pSrc,
-//                            PVOID *ppTarget,
-//                            LONG *plExtra)
+//      SlimDetoursCopyInstruction(PVOID pDst,
+//                                 PVOID *ppDstPool
+//                                 PVOID pSrc,
+//                                 PVOID *ppTarget,
+//                                 LONG *plExtra)
 //  Purpose:
 //      Copy a single instruction from pSrc to pDst.
 //
 //  Arguments:
 //      pDst:
 //          Destination address for the instruction.  May be NULL in which
-//          case DetourCopyInstruction is used to measure an instruction.
+//          case SlimDetoursCopyInstruction is used to measure an instruction.
 //          If not NULL then the source instruction is copied to the
 //          destination instruction and any relative arguments are adjusted.
 //      ppDstPool:
@@ -71,7 +71,7 @@
 //              (i.e. the jump is to an address held in a register.)
 //          Address:   The instruction has the specified target.
 //
-//      When copying instructions, DetourCopyInstruction insures that any
+//      When copying instructions, SlimDetoursCopyInstruction insures that any
 //      targets remain constant.  It does so by adjusting any IP relative
 //      offsets.
 //
@@ -232,7 +232,7 @@ protected:
     BYTE    m_rbScratchDst[64]; // matches or exceeds rbCode
 };
 
-PVOID NTAPI DetourCopyInstruction(
+PVOID NTAPI SlimDetoursCopyInstruction(
     _In_opt_ PVOID pDst,
     _Inout_opt_ PVOID* ppDstPool,
     _In_ PVOID pSrc,
@@ -2361,7 +2361,7 @@ BYTE CDetourDis::CopyLdrLiteral(BYTE* pSource, BYTE* pDest, ULONG instruction)
 }
 
 
-PVOID NTAPI DetourCopyInstruction(
+PVOID NTAPI SlimDetoursCopyInstruction(
     _In_opt_ PVOID pDst,
     _Inout_opt_ PVOID* ppDstPool,
     _In_ PVOID pSrc,
