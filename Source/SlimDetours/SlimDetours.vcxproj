@@ -27,6 +27,7 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="Memory.c" />
     <ClCompile Include="SlimDetours.cpp" />
     <ClCompile Include="Disasm.cpp" />
   </ItemGroup>

@@ -21,15 +21,17 @@ struct _DETOUR_ALIGN
 
 static_assert(sizeof(_DETOUR_ALIGN) == 1);
 
-//////////////////////////////////////////////////////////////////////////////
-//
-// Region reserved for system DLLs, which cannot be used for trampolines.
-//
-static PVOID s_pSystemRegionLowerBound = (PVOID)(ULONG_PTR)0x70000000;
-static PVOID s_pSystemRegionUpperBound = (PVOID)(ULONG_PTR)0x80000000;
+static RTL_RUN_ONCE g_InitOnce = RTL_RUN_ONCE_INIT;
 
-//////////////////////////////////////////////////////////////////////////////
-//
+static VOID detour_init()
+{
+    if (RtlRunOnceBeginInitialize(&g_InitOnce, 0, NULL) == STATUS_PENDING)
+    {
+        detour_memory_init();
+        RtlRunOnceComplete(&g_InitOnce, 0, NULL);
+    }
+}
+
 static bool detour_is_imported(PBYTE pbCode, PBYTE pbAddress)
 {
     NTSTATUS Status;
@@ -119,20 +121,6 @@ static bool detour_is_imported(PBYTE pbCode, PBYTE pbAddress)
     }
 
     return true;
-}
-
-inline ULONG_PTR detour_2gb_below(ULONG_PTR address)
-{
-    return address > (ULONG_PTR)0x7ff80000 ? address - 0x7ff80000 : 0x80000;
-}
-
-inline ULONG_PTR detour_2gb_above(ULONG_PTR address)
-{
-#if defined(_WIN64)
-    return address < (ULONG_PTR)0xffffffff80000000 ? address + 0x7ff80000 : (ULONG_PTR)0xfffffffffff80000;
-#else
-    return address < (ULONG_PTR)0x80000000 ? address + 0x7ff80000 : (ULONG_PTR)0xfff80000;
-#endif
 }
 
 #if defined(_M_IX86) || defined(_M_X64)
@@ -265,9 +253,9 @@ inline PBYTE detour_skip_jmp(_In_ PBYTE pbCode)
 inline void detour_find_jmp_bounds(PBYTE pbCode, PDETOUR_TRAMPOLINE* ppLower, PDETOUR_TRAMPOLINE* ppUpper)
 {
     // We have to place trampolines within +/- 2GB of code.
-    ULONG_PTR lo = detour_2gb_below((ULONG_PTR)pbCode);
-    ULONG_PTR hi = detour_2gb_above((ULONG_PTR)pbCode);
-    DETOUR_TRACE("[%p..%p..%p]\n", (PVOID)lo, pbCode, (PVOID)hi);
+    PVOID lo = detour_memory_2gb_below(pbCode);
+    PVOID hi = detour_memory_2gb_above(pbCode);
+    DETOUR_TRACE("[%p..%p..%p]\n", lo, pbCode, hi);
 
     // And, within +/- 2GB of relative jmp targets.
     if (pbCode[0] == 0xe9)
@@ -277,12 +265,12 @@ inline void detour_find_jmp_bounds(PBYTE pbCode, PDETOUR_TRAMPOLINE* ppLower, PD
 
         if (pbNew < pbCode)
         {
-            hi = detour_2gb_above((ULONG_PTR)pbNew);
+            hi = detour_memory_2gb_above(pbNew);
         } else
         {
-            lo = detour_2gb_below((ULONG_PTR)pbNew);
+            lo = detour_memory_2gb_below(pbNew);
         }
-        DETOUR_TRACE("[%p..%p..%p] +imm32\n", (PVOID)lo, pbCode, (PVOID)hi);
+        DETOUR_TRACE("[%p..%p..%p] +imm32\n", lo, pbCode, hi);
     }
 #if defined(_M_X64)
     // And, within +/- 2GB of relative jmp vectors.
@@ -293,12 +281,12 @@ inline void detour_find_jmp_bounds(PBYTE pbCode, PDETOUR_TRAMPOLINE* ppLower, PD
 
         if (pbNew < pbCode)
         {
-            hi = detour_2gb_above((ULONG_PTR)pbNew);
+            hi = detour_memory_2gb_above(pbNew);
         } else
         {
-            lo = detour_2gb_below((ULONG_PTR)pbNew);
+            lo = detour_memory_2gb_below(pbNew);
         }
-        DETOUR_TRACE("[%p..%p..%p] [+imm32]\n", (PVOID)lo, pbCode, (PVOID)hi);
+        DETOUR_TRACE("[%p..%p..%p] [+imm32]\n", lo, pbCode, hi);
     }
 #endif
 
@@ -672,9 +660,9 @@ inline void detour_find_jmp_bounds(PBYTE pbCode, PDETOUR_TRAMPOLINE* ppLower, PD
     // displacement of +/- 4GiB. In the future, this could be changed to
     // reflect that. For now, just reuse the x86 logic which is plenty.
 
-    ULONG_PTR lo = detour_2gb_below((ULONG_PTR)pbCode);
-    ULONG_PTR hi = detour_2gb_above((ULONG_PTR)pbCode);
-    DETOUR_TRACE("[%p..%p..%p]\n", (PVOID)lo, pbCode, (PVOID)hi);
+    PVOID lo = detour_memory_2gb_below(pbCode);
+    PVOID hi = detour_memory_2gb_above(pbCode);
+    DETOUR_TRACE("[%p..%p..%p]\n", lo, pbCode, hi);
 
     *ppLower = (PDETOUR_TRAMPOLINE)lo;
     *ppUpper = (PDETOUR_TRAMPOLINE)hi;
@@ -800,7 +788,7 @@ static PVOID detour_alloc_region_from_lo(PBYTE pbLo, PBYTE pbHi)
 
     while (pbTry < pbHi)
     {
-        if (pbTry >= s_pSystemRegionLowerBound && pbTry <= s_pSystemRegionUpperBound)
+        if (detour_memory_is_system_reserved(pbTry))
         {
             // Skip region reserved for system DLLs, but preserve address space entropy.
             pbTry += 0x08000000;
@@ -865,7 +853,7 @@ static PVOID detour_alloc_region_from_hi(PBYTE pbLo, PBYTE pbHi)
     while (pbTry > pbLo)
     {
         DETOUR_TRACE("  Try %p\n", pbTry);
-        if (pbTry >= s_pSystemRegionLowerBound && pbTry <= s_pSystemRegionUpperBound)
+        if (detour_memory_is_system_reserved(pbTry))
         {
             // Skip region reserved for system DLLs, but preserve address space entropy.
             pbTry -= 0x08000000;
@@ -1136,17 +1124,23 @@ NTSTATUS NTAPI SlimDetoursTransactionBegin()
         return STATUS_TRANSACTIONAL_CONFLICT;
     }
 
-    s_pPendingOperations = NULL;
-    s_pPendingThreads = NULL;
+    detour_init();
 
     // Make sure the trampoline pages are writable.
     Status = detour_writable_trampoline_regions();
     if (!NT_SUCCESS(Status))
     {
-#pragma warning(disable: __WARNING_INTERLOCKED_ACCESS)
-        s_nPendingThreadId = 0;
-#pragma warning(default: __WARNING_INTERLOCKED_ACCESS)
+        goto fail;
     }
+
+    s_pPendingOperations = NULL;
+    s_pPendingThreads = NULL;
+    return STATUS_SUCCESS;
+
+fail:
+#pragma warning(disable: __WARNING_INTERLOCKED_ACCESS)
+    s_nPendingThreadId = 0;
+#pragma warning(default: __WARNING_INTERLOCKED_ACCESS)
     return Status;
 }
 
