@@ -4,6 +4,7 @@
     <ClCompile Include="Disasm.cpp" />
     <ClCompile Include="SlimDetours.cpp" />
     <ClCompile Include="Memory.c" />
+    <ClCompile Include="Instruction.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="SlimDetours.h" />
