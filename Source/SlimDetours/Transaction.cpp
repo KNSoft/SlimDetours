@@ -12,25 +12,10 @@
 
 #include "SlimDetours.inl"
 
-struct DetourThread
-{
-    DetourThread* pNext;
-    HANDLE hThread;
-};
-
-struct DetourOperation
-{
-    DetourOperation* pNext;
-    BOOL fIsRemove;
-    PBYTE* ppbPointer;
-    PBYTE pbTarget;
-    PDETOUR_TRAMPOLINE pTrampoline;
-    ULONG dwPerm;
-};
-
 static ULONG s_nPendingThreadId = 0; // Thread owning pending transaction.
-static DetourThread* s_pPendingThreads = NULL;
-static DetourOperation* s_pPendingOperations = NULL;
+static PHANDLE s_phSuspendedThreads = NULL;
+static ULONG s_ulSuspendedThreadCount = 0;
+static PDETOUR_OPERATION s_pPendingOperations = NULL;
 
 NTSTATUS NTAPI SlimDetoursTransactionBegin()
 {
@@ -51,8 +36,14 @@ NTSTATUS NTAPI SlimDetoursTransactionBegin()
         goto fail;
     }
 
+    Status = detour_thread_suspend(&s_phSuspendedThreads, &s_ulSuspendedThreadCount);
+    if (!NT_SUCCESS(Status))
+    {
+        detour_runnable_trampoline_regions();
+        goto fail;
+    }
+
     s_pPendingOperations = NULL;
-    s_pPendingThreads = NULL;
     return STATUS_SUCCESS;
 
 fail:
@@ -74,7 +65,7 @@ NTSTATUS NTAPI SlimDetoursTransactionAbort()
     }
 
     // Restore all of the page permissions.
-    for (DetourOperation* o = s_pPendingOperations; o != NULL;)
+    for (PDETOUR_OPERATION o = s_pPendingOperations; o != NULL;)
     {
         // We don't care if this fails, because the code is still accessible.
         pMem = o->pbTarget;
@@ -89,7 +80,7 @@ NTSTATUS NTAPI SlimDetoursTransactionAbort()
             }
         }
 
-        DetourOperation* n = o->pNext;
+        PDETOUR_OPERATION n = o->pNext;
         delete o;
         o = n;
     }
@@ -99,43 +90,12 @@ NTSTATUS NTAPI SlimDetoursTransactionAbort()
     detour_runnable_trampoline_regions();
 
     // Resume any suspended threads.
-    for (DetourThread* t = s_pPendingThreads; t != NULL;)
-    {
-        // There is nothing we can do if this fails.
-        NtResumeThread(t->hThread, NULL);
+    detour_thread_resume(s_phSuspendedThreads, s_ulSuspendedThreadCount);
 
-        DetourThread* n = t->pNext;
-        delete t;
-        t = n;
-    }
-    s_pPendingThreads = NULL;
+    s_phSuspendedThreads = NULL;
+    s_ulSuspendedThreadCount = 0;
     s_nPendingThreadId = 0;
-
     return STATUS_SUCCESS;
-}
-
-static BYTE detour_align_from_trampoline(PDETOUR_TRAMPOLINE pTrampoline, BYTE obTrampoline)
-{
-    for (LONG n = 0; n < ARRAYSIZE(pTrampoline->rAlign); n++)
-    {
-        if (pTrampoline->rAlign[n].obTrampoline == obTrampoline)
-        {
-            return pTrampoline->rAlign[n].obTarget;
-        }
-    }
-    return 0;
-}
-
-static LONG detour_align_from_target(PDETOUR_TRAMPOLINE pTrampoline, LONG obTarget)
-{
-    for (LONG n = 0; n < ARRAYSIZE(pTrampoline->rAlign); n++)
-    {
-        if (pTrampoline->rAlign[n].obTarget == obTarget)
-        {
-            return pTrampoline->rAlign[n].obTrampoline;
-        }
-    }
-    return 0;
 }
 
 NTSTATUS NTAPI SlimDetoursTransactionCommit()
@@ -145,21 +105,29 @@ NTSTATUS NTAPI SlimDetoursTransactionCommit()
     DWORD dwOld;
 
     // Common variables.
-    DetourOperation* o;
-    DetourThread* t;
+    PDETOUR_OPERATION o, n;
+    PBYTE pbCode;
     BOOL freed = FALSE;
+    ULONG i;
 
     if (s_nPendingThreadId != CURRENT_THREAD_ID)
     {
         return STATUS_TRANSACTIONAL_CONFLICT;
     }
 
+    if (s_pPendingOperations == NULL)
+    {
+        goto _exit;
+    }
+
     // Insert or remove each of the detours.
-    for (o = s_pPendingOperations; o != NULL; o = o->pNext)
+    o = s_pPendingOperations;
+    do
     {
         if (o->fIsRemove)
         {
             RtlCopyMemory(o->pbTarget, o->pTrampoline->rbRestore, o->pTrampoline->cbRestore);
+            NtFlushInstructionCache(NtCurrentProcess(), o->pbTarget, o->pTrampoline->cbRestore);
             *o->ppbPointer = o->pbTarget;
         } else
         {
@@ -179,14 +147,16 @@ NTSTATUS NTAPI SlimDetoursTransactionCommit()
                          o->pbTarget[8], o->pbTarget[9], o->pbTarget[10], o->pbTarget[11]);
 
 #if defined(_M_X64)
-            detour_gen_jmp_indirect(o->pTrampoline->rbCodeIn, &o->pTrampoline->pbDetour);
-            PBYTE pbCode = detour_gen_jmp_immediate(o->pbTarget, o->pTrampoline->rbCodeIn);
+            pbCode = detour_gen_jmp_indirect(o->pTrampoline->rbCodeIn, &o->pTrampoline->pbDetour);
+            NtFlushInstructionCache(NtCurrentProcess(), pbCode, pbCode - o->pTrampoline->rbCodeIn);
+            pbCode = detour_gen_jmp_immediate(o->pbTarget, o->pTrampoline->rbCodeIn);
 #elif defined(_M_IX86)
-            PBYTE pbCode = detour_gen_jmp_immediate(o->pbTarget, o->pTrampoline->pbDetour);
+            pbCode = detour_gen_jmp_immediate(o->pbTarget, o->pTrampoline->pbDetour);
 #elif defined(_M_ARM64)
-            PBYTE pbCode = detour_gen_jmp_indirect(o->pbTarget, (ULONG64*)&(o->pTrampoline->pbDetour));
+            pbCode = detour_gen_jmp_indirect(o->pbTarget, (ULONG64*)&(o->pTrampoline->pbDetour));
 #endif
             pbCode = detour_gen_brk(pbCode, o->pTrampoline->pbRemain);
+            NtFlushInstructionCache(NtCurrentProcess(), o->pbTarget, pbCode - o->pbTarget);
             *o->ppbPointer = o->pTrampoline->rbCode;
             UNREFERENCED_PARAMETER(pbCode);
 
@@ -211,66 +181,23 @@ NTSTATUS NTAPI SlimDetoursTransactionCommit()
                          o->pTrampoline->rbCode[8], o->pTrampoline->rbCode[9],
                          o->pTrampoline->rbCode[10], o->pTrampoline->rbCode[11]);
         }
-    }
+
+        o = o->pNext;
+    } while (o != NULL);
 
     // Update any suspended threads.
-    for (t = s_pPendingThreads; t != NULL; t = t->pNext)
+    for (i = 0; i < s_ulSuspendedThreadCount; i++)
     {
-        CONTEXT cxt;
-        cxt.ContextFlags = CONTEXT_CONTROL;
-
-#undef DETOURS_EIP
-
-#if defined(_M_IX86)
-#define DETOURS_EIP Eip
-#elif defined(_M_X64)
-#define DETOURS_EIP Rip
-#elif defined(_M_ARM64)
-#define DETOURS_EIP Pc
-#endif
-
-        if (NT_SUCCESS(NtGetContextThread(t->hThread, &cxt)))
-        {
-            for (o = s_pPendingOperations; o != NULL; o = o->pNext)
-            {
-                if (o->fIsRemove)
-                {
-                    if (cxt.DETOURS_EIP >= (ULONG_PTR)o->pTrampoline &&
-                        cxt.DETOURS_EIP < ((ULONG_PTR)o->pTrampoline + sizeof(o->pTrampoline)))
-                    {
-
-                        cxt.DETOURS_EIP = (ULONG_PTR)o->pbTarget +
-                            detour_align_from_trampoline(o->pTrampoline,
-                                                         (BYTE)(cxt.DETOURS_EIP - (ULONG_PTR)o->pTrampoline));
-
-                        NtSetContextThread(t->hThread, &cxt);
-                    }
-                } else
-                {
-                    if (cxt.DETOURS_EIP >= (ULONG_PTR)o->pbTarget &&
-                        cxt.DETOURS_EIP < ((ULONG_PTR)o->pbTarget + o->pTrampoline->cbRestore))
-                    {
-
-                        cxt.DETOURS_EIP = (ULONG_PTR)o->pTrampoline +
-                            detour_align_from_target(o->pTrampoline, (BYTE)(cxt.DETOURS_EIP - (ULONG_PTR)o->pbTarget));
-
-                        NtSetContextThread(t->hThread, &cxt);
-                    }
-                }
-            }
-        }
-#undef DETOURS_EIP
+        detour_thread_update(s_phSuspendedThreads[i], s_pPendingOperations);
     }
 
-    // Restore all of the page permissions and flush the icache.
+    // Restore all of the page permissions and free any trampoline regions that are now unused.
     for (o = s_pPendingOperations; o != NULL;)
     {
         // We don't care if this fails, because the code is still accessible.
         pMem = o->pbTarget;
         sMem = o->pTrampoline->cbRestore;
         NtProtectVirtualMemory(NtCurrentProcess(), &pMem, &sMem, o->dwPerm, &dwOld);
-        NtFlushInstructionCache(NtCurrentProcess(), o->pbTarget, o->pTrampoline->cbRestore);
-
         if (o->fIsRemove && o->pTrampoline)
         {
             detour_free_trampoline(o->pTrampoline);
@@ -278,71 +205,25 @@ NTSTATUS NTAPI SlimDetoursTransactionCommit()
             freed = true;
         }
 
-        DetourOperation* n = o->pNext;
+        n = o->pNext;
         delete o;
         o = n;
     }
     s_pPendingOperations = NULL;
-
-    // Free any trampoline regions that are now unused.
     if (freed)
     {
         detour_free_unused_trampoline_regions();
     }
 
+_exit:
     // Make sure the trampoline pages are no longer writable.
     detour_runnable_trampoline_regions();
 
     // Resume any suspended threads.
-    for (t = s_pPendingThreads; t != NULL;)
-    {
-        // There is nothing we can do if this fails.
-        NtResumeThread(t->hThread, NULL);
-
-        DetourThread* n = t->pNext;
-        delete t;
-        t = n;
-    }
-    s_pPendingThreads = NULL;
+    detour_thread_resume(s_phSuspendedThreads, s_ulSuspendedThreadCount);
+    s_phSuspendedThreads = NULL;
+    s_ulSuspendedThreadCount = 0;
     s_nPendingThreadId = 0;
-
-    return STATUS_SUCCESS;
-}
-
-NTSTATUS NTAPI SlimDetoursUpdateThread(_In_ HANDLE hThread)
-{
-    NTSTATUS Status;
-
-    // Silently (and safely) drop any attempt to suspend our own thread.
-    if (hThread == NtCurrentThread())
-    {
-        return STATUS_SUCCESS;
-    }
-
-    DetourThread* t = new(std::nothrow) DetourThread;
-    if (t == NULL)
-    {
-        Status = STATUS_NO_MEMORY;
-fail:
-        if (t != NULL)
-        {
-            delete t;
-            t = NULL;
-        }
-        DETOUR_BREAK();
-        return Status;
-    }
-
-    Status = NtSuspendThread(hThread, NULL);
-    if (!NT_SUCCESS(Status))
-    {
-        DETOUR_BREAK();
-        goto fail;
-    }
-
-    t->hThread = hThread;
-    t->pNext = s_pPendingThreads;
-    s_pPendingThreads = t;
 
     return STATUS_SUCCESS;
 }
@@ -362,7 +243,7 @@ NTSTATUS NTAPI SlimDetoursAttach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour)
 
     PBYTE pbTarget = (PBYTE)*ppPointer;
     PDETOUR_TRAMPOLINE pTrampoline = NULL;
-    DetourOperation* o = NULL;
+    PDETOUR_OPERATION o = NULL;
 
     pbTarget = (PBYTE)detour_skip_jmp(pbTarget);
     pDetour = detour_skip_jmp((PBYTE)pDetour);
@@ -375,7 +256,7 @@ NTSTATUS NTAPI SlimDetoursAttach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour)
         goto fail;
     }
 
-    o = new(std::nothrow) DetourOperation;
+    o = new(std::nothrow) DETOUR_OPERATION;
     if (o == NULL)
     {
         Status = STATUS_NO_MEMORY;
@@ -561,7 +442,7 @@ NTSTATUS NTAPI SlimDetoursDetach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour)
         return STATUS_TRANSACTIONAL_CONFLICT;
     }
 
-    DetourOperation* o = new(std::nothrow) DetourOperation;
+    PDETOUR_OPERATION o = new(std::nothrow) DETOUR_OPERATION;
     if (o == NULL)
     {
         Status = STATUS_NO_MEMORY;

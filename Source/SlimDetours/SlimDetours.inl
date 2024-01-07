@@ -105,6 +105,18 @@ static_assert(sizeof(DETOUR_TRAMPOLINE) == 96);
 static_assert(sizeof(DETOUR_TRAMPOLINE) == 184);
 #endif
 
+typedef struct _DETOUR_OPERATION DETOUR_OPERATION, *PDETOUR_OPERATION;
+
+struct _DETOUR_OPERATION
+{
+    PDETOUR_OPERATION pNext;
+    BOOL fIsRemove;
+    PBYTE* ppbPointer;
+    PBYTE pbTarget;
+    PDETOUR_TRAMPOLINE pTrampoline;
+    ULONG dwPerm;
+};
+
 /* Memory management */
 
 VOID detour_memory_init();
@@ -158,6 +170,18 @@ BOOL detour_does_code_end_function(_In_ PBYTE pbCode);
 
 ULONG detour_is_code_filler(_In_ PBYTE pbCode);
 
+/* Thread management */
+
+NTSTATUS detour_thread_suspend(
+    _Outptr_result_maybenull_ PHANDLE* SuspendedHandles,
+    _Out_ PULONG SuspendedHandleCount);
+
+VOID detour_thread_resume(
+    _In_reads_(SuspendedHandleCount) _Frees_ptr_ PHANDLE SuspendedHandles,
+    _In_ ULONG SuspendedHandleCount);
+
+NTSTATUS detour_thread_update(_In_ HANDLE ThreadHandle, _In_ PDETOUR_OPERATION PendingOperations);
+
 /* Trampoline management */
 
 NTSTATUS detour_writable_trampoline_regions();
@@ -170,5 +194,9 @@ PDETOUR_TRAMPOLINE detour_alloc_trampoline(_In_ PBYTE pbTarget);
 VOID detour_free_trampoline(_In_ PDETOUR_TRAMPOLINE pTrampoline);
 
 VOID detour_free_unused_trampoline_regions();
+
+BYTE detour_align_from_trampoline(_In_ PDETOUR_TRAMPOLINE pTrampoline, BYTE obTrampoline);
+
+LONG detour_align_from_target(_In_ PDETOUR_TRAMPOLINE pTrampoline, LONG obTarget);
 
 EXTERN_C_END

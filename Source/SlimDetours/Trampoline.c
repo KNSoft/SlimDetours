@@ -397,3 +397,31 @@ VOID detour_free_unused_trampoline_regions()
         pRegion = *ppRegionBase;
     }
 }
+
+BYTE detour_align_from_trampoline(_In_ PDETOUR_TRAMPOLINE pTrampoline, BYTE obTrampoline)
+{
+    LONG n;
+
+    for (n = 0; n < ARRAYSIZE(pTrampoline->rAlign); n++)
+    {
+        if (pTrampoline->rAlign[n].obTrampoline == obTrampoline)
+        {
+            return pTrampoline->rAlign[n].obTarget;
+        }
+    }
+    return 0;
+}
+
+LONG detour_align_from_target(_In_ PDETOUR_TRAMPOLINE pTrampoline, LONG obTarget)
+{
+    LONG n;
+
+    for (n = 0; n < ARRAYSIZE(pTrampoline->rAlign); n++)
+    {
+        if (pTrampoline->rAlign[n].obTarget == obTarget)
+        {
+            return pTrampoline->rAlign[n].obTrampoline;
+        }
+    }
+    return 0;
+}

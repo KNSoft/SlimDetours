@@ -7,6 +7,7 @@
     <ClCompile Include="Instruction.c" />
     <ClCompile Include="Trampoline.c" />
     <ClCompile Include="Transaction.cpp" />
+    <ClCompile Include="Thread.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="SlimDetours.h" />

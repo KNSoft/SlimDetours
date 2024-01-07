@@ -31,8 +31,6 @@ NTSTATUS NTAPI SlimDetoursTransactionBegin();
 NTSTATUS NTAPI SlimDetoursTransactionAbort();
 NTSTATUS NTAPI SlimDetoursTransactionCommit();
 
-NTSTATUS NTAPI SlimDetoursUpdateThread(_In_ HANDLE hThread);
-
 NTSTATUS NTAPI SlimDetoursAttach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour);
 NTSTATUS NTAPI SlimDetoursDetach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour);
 
