@@ -154,4 +154,17 @@ BOOL detour_does_code_end_function(_In_ PBYTE pbCode);
 
 ULONG detour_is_code_filler(_In_ PBYTE pbCode);
 
+/* Trampoline management */
+
+NTSTATUS detour_writable_trampoline_regions();
+
+VOID detour_runnable_trampoline_regions();
+
+_Ret_maybenull_
+PDETOUR_TRAMPOLINE detour_alloc_trampoline(_In_ PBYTE pbTarget);
+
+VOID detour_free_trampoline(_In_ PDETOUR_TRAMPOLINE pTrampoline);
+
+VOID detour_free_unused_trampoline_regions();
+
 EXTERN_C_END
