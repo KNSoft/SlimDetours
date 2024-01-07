@@ -11,7 +11,6 @@
  */
 
 #include "SlimDetours.inl"
-#include "SlimDetours.h"
 
 #undef ASSERT
 #define ASSERT(x)

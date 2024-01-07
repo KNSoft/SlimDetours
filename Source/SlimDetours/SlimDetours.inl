@@ -8,6 +8,8 @@
 #include <new>
 #endif
 
+#include "SlimDetours.h"
+
 #if _DEBUG
 #define DETOUR_TRACE DbgPrint
 #define DETOUR_BREAK() __debugbreak()
@@ -21,6 +23,8 @@
 #define _2GB GB_TO_BYTES((ULONG_PTR)2)
 
 EXTERN_C_START
+
+VOID detour_init();
 
 /* Basic structures */
 

@@ -32,6 +32,7 @@
     <ClCompile Include="SlimDetours.cpp" />
     <ClCompile Include="Disasm.cpp" />
     <ClCompile Include="Trampoline.c" />
+    <ClCompile Include="Transaction.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="SlimDetours.h" />
