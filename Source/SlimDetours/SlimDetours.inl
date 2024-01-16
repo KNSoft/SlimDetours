@@ -34,7 +34,7 @@ typedef struct _DETOUR_ALIGN
     BYTE obTrampoline : 5;
 } DETOUR_ALIGN, *PDETOUR_ALIGN;
 
-static_assert(sizeof(DETOUR_ALIGN) == 1);
+_STATIC_ASSERT(sizeof(DETOUR_ALIGN) == 1);
 
 typedef struct _DETOUR_TRAMPOLINE
 {
@@ -98,11 +98,11 @@ typedef struct _DETOUR_TRAMPOLINE
 } DETOUR_TRAMPOLINE, *PDETOUR_TRAMPOLINE;
 
 #if defined(_M_IX86)
-static_assert(sizeof(DETOUR_TRAMPOLINE) == 72);
+_STATIC_ASSERT(sizeof(DETOUR_TRAMPOLINE) == 72);
 #elif defined(_M_X64)
-static_assert(sizeof(DETOUR_TRAMPOLINE) == 96);
+_STATIC_ASSERT(sizeof(DETOUR_TRAMPOLINE) == 96);
 #elif defined(_M_ARM64)
-static_assert(sizeof(DETOUR_TRAMPOLINE) == 184);
+_STATIC_ASSERT(sizeof(DETOUR_TRAMPOLINE) == 184);
 #endif
 
 typedef struct _DETOUR_OPERATION DETOUR_OPERATION, *PDETOUR_OPERATION;
@@ -197,6 +197,6 @@ VOID detour_free_unused_trampoline_regions();
 
 BYTE detour_align_from_trampoline(_In_ PDETOUR_TRAMPOLINE pTrampoline, BYTE obTrampoline);
 
-LONG detour_align_from_target(_In_ PDETOUR_TRAMPOLINE pTrampoline, LONG obTarget);
+BYTE detour_align_from_target(_In_ PDETOUR_TRAMPOLINE pTrampoline, BYTE obTarget);
 
 EXTERN_C_END

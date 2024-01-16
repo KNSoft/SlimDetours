@@ -31,7 +31,7 @@ static SYSTEM_BASIC_INFORMATION g_sbi = {
  * when loaded into every process as far as possible. Avoid using this region for trampoline.
  *
  * The region is [0x50000000 ... 0x78000000] (640MB) on 32-bit Windows;
- * and [0X00007FF7FFFF0000 ... 0x00007FFFFFFF0000] (32GB) on 64-bit Windows, which is too large to avoid.
+ * and [0x00007FF7FFFF0000 ... 0x00007FFFFFFF0000] (32GB) on 64-bit Windows, which is too large to avoid.
  * In this case, avoiding 1GB range starting at Ntdll.dll is make sense.
  *
  * Use MI_ASLR_* provided by Wintexports instead of hard-coded.
@@ -42,17 +42,17 @@ static SYSTEM_BASIC_INFORMATION g_sbi = {
 #define SYSTEM_RESERVED_REGION_LOWEST (SYSTEM_RESERVED_REGION_HIGHEST - SYSTEM_RESERVED_REGION_SIZE + 1)
 
 #if defined(_WIN64)
-static_assert(SYSTEM_RESERVED_REGION_HIGHEST + 1 == 0x00007FFFFFFF0000ULL);
-static_assert(SYSTEM_RESERVED_REGION_SIZE == GB_TO_BYTES(32ULL));
-static_assert(SYSTEM_RESERVED_REGION_LOWEST == 0X00007FF7FFFF0000ULL);
+_STATIC_ASSERT(SYSTEM_RESERVED_REGION_HIGHEST + 1 == 0x00007FFFFFFF0000ULL);
+_STATIC_ASSERT(SYSTEM_RESERVED_REGION_SIZE == GB_TO_BYTES(32ULL));
+_STATIC_ASSERT(SYSTEM_RESERVED_REGION_LOWEST == 0X00007FF7FFFF0000ULL);
 
 static ULONG_PTR s_ulSystemRegionHighLowerBound = MAXULONG_PTR;
 static ULONG_PTR s_ulSystemRegionLowUpperBound = 0;
 static ULONG_PTR s_ulSystemRegionLowLowerBound = 0;
 #else
-static_assert(SYSTEM_RESERVED_REGION_HIGHEST + 1 == 0x78000000UL);
-static_assert(SYSTEM_RESERVED_REGION_SIZE == MB_TO_BYTES(640UL));
-static_assert(SYSTEM_RESERVED_REGION_LOWEST == 0x50000000UL);
+_STATIC_ASSERT(SYSTEM_RESERVED_REGION_HIGHEST + 1 == 0x78000000UL);
+_STATIC_ASSERT(SYSTEM_RESERVED_REGION_SIZE == MB_TO_BYTES(640UL));
+_STATIC_ASSERT(SYSTEM_RESERVED_REGION_LOWEST == 0x50000000UL);
 
 static ULONG_PTR s_ulSystemRegionLowUpperBound = SYSTEM_RESERVED_REGION_HIGHEST;
 static ULONG_PTR s_ulSystemRegionLowLowerBound = SYSTEM_RESERVED_REGION_LOWEST;

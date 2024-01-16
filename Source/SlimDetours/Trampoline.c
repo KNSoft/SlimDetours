@@ -400,7 +400,7 @@ VOID detour_free_unused_trampoline_regions()
 
 BYTE detour_align_from_trampoline(_In_ PDETOUR_TRAMPOLINE pTrampoline, BYTE obTrampoline)
 {
-    LONG n;
+    ULONG n;
 
     for (n = 0; n < ARRAYSIZE(pTrampoline->rAlign); n++)
     {
@@ -412,9 +412,9 @@ BYTE detour_align_from_trampoline(_In_ PDETOUR_TRAMPOLINE pTrampoline, BYTE obTr
     return 0;
 }
 
-LONG detour_align_from_target(_In_ PDETOUR_TRAMPOLINE pTrampoline, LONG obTarget)
+BYTE detour_align_from_target(_In_ PDETOUR_TRAMPOLINE pTrampoline, BYTE obTarget)
 {
-    LONG n;
+    ULONG n;
 
     for (n = 0; n < ARRAYSIZE(pTrampoline->rAlign); n++)
     {

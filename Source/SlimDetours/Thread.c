@@ -133,40 +133,28 @@ NTSTATUS detour_thread_update(_In_ HANDLE ThreadHandle, _In_ PDETOUR_OPERATION P
 
     for (o = PendingOperations; o != NULL; o = o->pNext)
     {
-
-#undef DETOURS_EIP
-#if defined(_M_IX86)
-#define DETOURS_EIP Eip
-#elif defined(_M_X64)
-#define DETOURS_EIP Rip
-#elif defined(_M_ARM64)
-#define DETOURS_EIP Pc
-#endif
         bUpdateContext = FALSE;
         if (o->fIsRemove)
         {
-            if (cxt.DETOURS_EIP >= (ULONG_PTR)o->pTrampoline &&
-                cxt.DETOURS_EIP < ((ULONG_PTR)o->pTrampoline + sizeof(o->pTrampoline)))
+            if (cxt.CONTEXT_PC >= (ULONG_PTR)o->pTrampoline &&
+                cxt.CONTEXT_PC < ((ULONG_PTR)o->pTrampoline + sizeof(o->pTrampoline)))
             {
 
-                cxt.DETOURS_EIP = (ULONG_PTR)o->pbTarget +
-                    detour_align_from_trampoline(o->pTrampoline,
-                                                 (BYTE)(cxt.DETOURS_EIP - (ULONG_PTR)o->pTrampoline));
+                cxt.CONTEXT_PC = (ULONG_PTR)o->pbTarget +
+                    detour_align_from_trampoline(o->pTrampoline, (BYTE)(cxt.CONTEXT_PC - (ULONG_PTR)o->pTrampoline));
                 bUpdateContext = TRUE;
             }
         } else
         {
-            if (cxt.DETOURS_EIP >= (ULONG_PTR)o->pbTarget &&
-                cxt.DETOURS_EIP < ((ULONG_PTR)o->pbTarget + o->pTrampoline->cbRestore))
+            if (cxt.CONTEXT_PC >= (ULONG_PTR)o->pbTarget &&
+                cxt.CONTEXT_PC < ((ULONG_PTR)o->pbTarget + o->pTrampoline->cbRestore))
             {
 
-                cxt.DETOURS_EIP = (ULONG_PTR)o->pTrampoline +
-                    detour_align_from_target(o->pTrampoline, (BYTE)(cxt.DETOURS_EIP - (ULONG_PTR)o->pbTarget));
+                cxt.CONTEXT_PC = (ULONG_PTR)o->pTrampoline +
+                    detour_align_from_target(o->pTrampoline, (BYTE)(cxt.CONTEXT_PC - (ULONG_PTR)o->pbTarget));
                 bUpdateContext = TRUE;
             }
         }
-#undef DETOURS_EIP
-
         if (bUpdateContext)
         {
             Status = NtSetContextThread(ThreadHandle, &cxt);

@@ -12,7 +12,7 @@
 
 #include "SlimDetours.inl"
 
-static ULONG s_nPendingThreadId = 0; // Thread owning pending transaction.
+static HANDLE s_nPendingThreadId = 0; // Thread owning pending transaction.
 static PHANDLE s_phSuspendedThreads = NULL;
 static ULONG s_ulSuspendedThreadCount = 0;
 static PDETOUR_OPERATION s_pPendingOperations = NULL;
@@ -22,7 +22,7 @@ NTSTATUS NTAPI SlimDetoursTransactionBegin()
     NTSTATUS Status;
 
     // Make sure only one thread can start a transaction.
-    if (_InterlockedCompareExchange(&s_nPendingThreadId, CURRENT_THREAD_ID, 0) != 0)
+    if (_InterlockedCompareExchangePointer(&s_nPendingThreadId, CURRENT_THREAD_ID, 0) != 0)
     {
         return STATUS_TRANSACTIONAL_CONFLICT;
     }
@@ -237,7 +237,6 @@ NTSTATUS NTAPI SlimDetoursAttach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour)
 
     if (s_nPendingThreadId != CURRENT_THREAD_ID)
     {
-        DETOUR_TRACE("transaction conflict with thread id=%lu\n", s_nPendingThreadId);
         return STATUS_TRANSACTIONAL_CONFLICT;
     }
 

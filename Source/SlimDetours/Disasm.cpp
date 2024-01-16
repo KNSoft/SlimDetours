@@ -1620,9 +1620,9 @@ const BYTE CDetourDis::s_rceCopyTable0F[] =
 
 BOOL CDetourDis::SanityCheckSystem()
 {
-    static_assert(ARRAYSIZE(CDetourDis::s_rceCopyMap) == eENTRY_Invalid + 1);
-    static_assert(ARRAYSIZE(CDetourDis::s_rceCopyTable) == 256);
-    static_assert(ARRAYSIZE(CDetourDis::s_rceCopyTable0F) == 256);
+    _STATIC_ASSERT(ARRAYSIZE(CDetourDis::s_rceCopyMap) == eENTRY_Invalid + 1);
+    _STATIC_ASSERT(ARRAYSIZE(CDetourDis::s_rceCopyTable) == 256);
+    _STATIC_ASSERT(ARRAYSIZE(CDetourDis::s_rceCopyTable0F) == 256);
     return TRUE;
 }
 #endif // defined(_M_X64) || defined(_M_IX86)

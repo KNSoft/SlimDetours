@@ -43,7 +43,7 @@ static BOOL detour_is_imported(_In_ PVOID pbCode, _In_ PVOID pbAddress)
      * RegionSize should >= PAGE_SIZE and PAGE_SIZE always >= sizeof(IMAGE_DOS_HEADER),
      * so we can access IMAGE_DOS_HEADER safely without boundary check.
      */
-    static_assert(PAGE_SIZE >= sizeof(IMAGE_DOS_HEADER));
+    _STATIC_ASSERT(PAGE_SIZE >= sizeof(IMAGE_DOS_HEADER));
     if (mbi.RegionSize < PAGE_SIZE)
     {
         return FALSE;
@@ -79,7 +79,7 @@ static BOOL detour_is_imported(_In_ PVOID pbCode, _In_ PVOID pbAddress)
     }
 
     /* Step forward to IMAGE_OPTIONAL_HEADER and check magic */
-    static_assert(UFIELD_OFFSET(IMAGE_OPTIONAL_HEADER, Magic) == 0);
+    _STATIC_ASSERT(UFIELD_OFFSET(IMAGE_OPTIONAL_HEADER, Magic) == 0);
     wNtMagic = pNtHeader->OptionalHeader.Magic;
     if ((wNtMagic != IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
          pNtHeader->FileHeader.SizeOfOptionalHeader != sizeof(IMAGE_OPTIONAL_HEADER64)) &&
