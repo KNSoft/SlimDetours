@@ -29,11 +29,11 @@
   <ItemGroup>
     <ClCompile Include="Instruction.c" />
     <ClCompile Include="Memory.c" />
-    <ClCompile Include="SlimDetours.cpp" />
-    <ClCompile Include="Disasm.cpp" />
+    <ClCompile Include="SlimDetours.c" />
+    <ClCompile Include="Disasm.c" />
     <ClCompile Include="Thread.c" />
     <ClCompile Include="Trampoline.c" />
-    <ClCompile Include="Transaction.cpp" />
+    <ClCompile Include="Transaction.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="SlimDetours.h" />

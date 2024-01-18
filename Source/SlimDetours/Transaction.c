@@ -81,7 +81,7 @@ NTSTATUS NTAPI SlimDetoursTransactionAbort()
         }
 
         PDETOUR_OPERATION n = o->pNext;
-        delete o;
+        detour_memory_free(o);
         o = n;
     }
     s_pPendingOperations = NULL;
@@ -202,11 +202,11 @@ NTSTATUS NTAPI SlimDetoursTransactionCommit()
         {
             detour_free_trampoline(o->pTrampoline);
             o->pTrampoline = NULL;
-            freed = true;
+            freed = TRUE;
         }
 
         n = o->pNext;
-        delete o;
+        detour_memory_free(o);
         o = n;
     }
     s_pPendingOperations = NULL;
@@ -255,7 +255,7 @@ NTSTATUS NTAPI SlimDetoursAttach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour)
         goto fail;
     }
 
-    o = new(std::nothrow) DETOUR_OPERATION;
+    o = detour_memory_alloc(sizeof(DETOUR_OPERATION));
     if (o == NULL)
     {
         Status = STATUS_NO_MEMORY;
@@ -268,8 +268,7 @@ fail:
         }
         if (o != NULL)
         {
-            delete o;
-            o = NULL;
+            detour_memory_free(o);
         }
         SlimDetoursTransactionAbort();
         return Status;
@@ -305,8 +304,8 @@ fail:
         DETOUR_TRACE(" SlimDetoursCopyInstruction() = %p (%d bytes)\n", pbSrc, (int)(pbSrc - pbOp));
         pbTrampoline += (pbSrc - pbOp) + lExtra;
         cbTarget = PtrOffset(pbTarget, pbSrc);
-        pTrampoline->rAlign[nAlign].obTarget = cbTarget;
-        pTrampoline->rAlign[nAlign].obTrampoline = pbTrampoline - pTrampoline->rbCode;
+        pTrampoline->rAlign[nAlign].obTarget = (BYTE)cbTarget;
+        pTrampoline->rAlign[nAlign].obTrampoline = (BYTE)(pbTrampoline - pTrampoline->rbCode);
         nAlign++;
 
         if (nAlign >= ARRAYSIZE(pTrampoline->rAlign))
@@ -441,7 +440,7 @@ NTSTATUS NTAPI SlimDetoursDetach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour)
         return STATUS_TRANSACTIONAL_CONFLICT;
     }
 
-    PDETOUR_OPERATION o = new(std::nothrow) DETOUR_OPERATION;
+    PDETOUR_OPERATION o = detour_memory_alloc(sizeof(DETOUR_OPERATION));
     if (o == NULL)
     {
         Status = STATUS_NO_MEMORY;
@@ -449,8 +448,7 @@ fail:
         DETOUR_BREAK();
         if (o != NULL)
         {
-            delete o;
-            o = NULL;
+            detour_memory_free(o);
         }
         SlimDetoursTransactionAbort();
         return Status;

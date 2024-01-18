@@ -24,6 +24,8 @@ static SYSTEM_BASIC_INFORMATION g_sbi = {
 #endif
 };
 
+static HANDLE g_hHeap = NULL;
+
 /*
  * Region reserved for system DLLs
  *
@@ -44,7 +46,7 @@ static SYSTEM_BASIC_INFORMATION g_sbi = {
 #if defined(_WIN64)
 _STATIC_ASSERT(SYSTEM_RESERVED_REGION_HIGHEST + 1 == 0x00007FFFFFFF0000ULL);
 _STATIC_ASSERT(SYSTEM_RESERVED_REGION_SIZE == GB_TO_BYTES(32ULL));
-_STATIC_ASSERT(SYSTEM_RESERVED_REGION_LOWEST == 0X00007FF7FFFF0000ULL);
+_STATIC_ASSERT(SYSTEM_RESERVED_REGION_LOWEST == 0x00007FF7FFFF0000ULL);
 
 static ULONG_PTR s_ulSystemRegionHighLowerBound = MAXULONG_PTR;
 static ULONG_PTR s_ulSystemRegionLowUpperBound = 0;
@@ -76,6 +78,25 @@ VOID detour_memory_init()
         s_ulSystemRegionLowLowerBound = SYSTEM_RESERVED_REGION_LOWEST;
     }
 #endif
+
+    g_hHeap = RtlCreateHeap(HEAP_NO_SERIALIZE | HEAP_GROWABLE, NULL, 0, 0, NULL, NULL);
+}
+
+_Must_inspect_result_
+_Ret_maybenull_
+_Post_writable_byte_size_(Size)
+PVOID detour_memory_alloc(_In_range_(>, 0) SIZE_T Size)
+{
+    if (g_hHeap == NULL)
+    {
+        g_hHeap = CURRENT_PROCESS_HEAP;
+    }
+    return RtlAllocateHeap(g_hHeap, 0, Size);
+}
+
+BOOL detour_memory_free(_Frees_ptr_ PVOID BaseAddress)
+{
+    return RtlFreeHeap(g_hHeap, 0, BaseAddress);
 }
 
 BOOL detour_memory_is_system_reserved(_In_ PVOID Address)
