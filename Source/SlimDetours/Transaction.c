@@ -12,10 +12,34 @@
 
 #include "SlimDetours.inl"
 
+#pragma comment(lib, "WIE_WinAPI.lib")
+
+typedef struct _DETOUR_DELAY_ATTACH DETOUR_DELAY_ATTACH, *PDETOUR_DELAY_ATTACH;
+typedef VOID(CALLBACK* DETOUR_DELAY_ATTACH_CALLBACK)(
+    _In_ NTSTATUS Status,
+    _In_ PVOID* ppPointer,
+    _In_ PCWSTR DllName,
+    _In_ PCSTR Function,
+    _In_opt_ PVOID Context);
+
+struct _DETOUR_DELAY_ATTACH
+{
+    PDETOUR_DELAY_ATTACH pNext;
+    UNICODE_STRING usDllName;
+    PCSTR pszFunction;
+    PVOID* ppPointer;
+    PVOID pDetour;
+    DETOUR_DELAY_ATTACH_CALLBACK pfnCallback;
+    PVOID Context;
+};
+
 static HANDLE s_nPendingThreadId = 0; // Thread owning pending transaction.
 static PHANDLE s_phSuspendedThreads = NULL;
 static ULONG s_ulSuspendedThreadCount = 0;
 static PDETOUR_OPERATION s_pPendingOperations = NULL;
+static RTL_SRWLOCK g_DelayedAttachesLock = RTL_SRWLOCK_INIT;
+static PVOID g_DllNotifyCookie = NULL;
+static PDETOUR_DELAY_ATTACH g_DelayedAttaches = NULL;
 
 NTSTATUS NTAPI SlimDetoursTransactionBegin()
 {
@@ -270,7 +294,6 @@ fail:
         {
             detour_memory_free(o);
         }
-        SlimDetoursTransactionAbort();
         return Status;
     }
 
@@ -450,7 +473,6 @@ fail:
         {
             detour_memory_free(o);
         }
-        SlimDetoursTransactionAbort();
         return Status;
     }
 
@@ -486,4 +508,185 @@ fail:
     s_pPendingOperations = o;
 
     return STATUS_SUCCESS;
+}
+
+static NTSTATUS NTAPI detour_attach_now(
+    _Out_ PVOID* ppPointer,
+    _In_ PVOID pDetour,
+    _In_ PVOID DllBase,
+    _In_ PCSTR Function)
+{
+    NTSTATUS Status;
+    ANSI_STRING FunctionString;
+    ULONG Ordinal;
+    PANSI_STRING pFunctionString;
+    PVOID FunctionAddress;
+
+    if ((ULONG_PTR)Function <= MAXUSHORT)
+    {
+        Ordinal = (ULONG)(ULONG_PTR)Function;
+        if (Ordinal == 0)
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+        pFunctionString = NULL;
+    } else
+    {
+        Ordinal = 0;
+        Status = RtlInitAnsiStringEx(&FunctionString, Function);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+        pFunctionString = &FunctionString;
+    }
+    /*
+     * False positive.
+     * Ordinal always > 0 when pFunctionString is NULL,
+     * SAL is right but compiler didn't recognize Ordinal than immediate value
+     */
+#pragma warning(disable: __WARNING_INVALID_PARAM_VALUE_1)
+    Status = LdrGetProcedureAddress(DllBase, pFunctionString, Ordinal, &FunctionAddress);
+#pragma warning(default: __WARNING_INVALID_PARAM_VALUE_1)
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    Status = SlimDetoursTransactionBegin();
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+    *ppPointer = FunctionAddress;
+    Status = SlimDetoursAttach(ppPointer, pDetour);
+    if (!NT_SUCCESS(Status))
+    {
+        SlimDetoursTransactionAbort();
+        return Status;
+    }
+    return SlimDetoursTransactionCommit();
+}
+
+static VOID CALLBACK detour_dll_notify_proc(
+    _In_ ULONG NotificationReason,
+    _In_ PCLDR_DLL_NOTIFICATION_DATA NotificationData,
+    _In_opt_ PVOID Context)
+{
+    NTSTATUS Status;
+    PDETOUR_DELAY_ATTACH pAttach, pPrevAttach, pNextAttach;
+
+    if (NotificationReason != LDR_DLL_NOTIFICATION_REASON_LOADED || g_DelayedAttaches == NULL)
+    {
+        return;
+    }
+
+    RtlAcquireSRWLockExclusive(&g_DelayedAttachesLock);
+
+    pPrevAttach = NULL;
+    pAttach = g_DelayedAttaches;
+    while (pAttach != NULL)
+    {
+        /* Match Dll name */
+        if (RtlCompareUnicodeString(&pAttach->usDllName, NotificationData->Loaded.BaseDllName, FALSE) != 0)
+        {
+            pPrevAttach = pAttach;
+            pAttach = pAttach->pNext;
+            continue;
+        }
+
+        /* Attach detours */
+        Status = detour_attach_now(pAttach->ppPointer,
+                                   pAttach->pDetour,
+                                   NotificationData->Loaded.DllBase,
+                                   pAttach->pszFunction);
+        if (pAttach->pfnCallback != NULL)
+        {
+            pAttach->pfnCallback(Status,
+                                 pAttach->ppPointer,
+                                 pAttach->usDllName.Buffer,
+                                 pAttach->pszFunction,
+                                 pAttach->Context);
+        }
+
+        /* Free the delayed attach node */
+        pNextAttach = pAttach->pNext;
+        detour_memory_free(pAttach);
+        if (pPrevAttach != NULL)
+        {
+            pPrevAttach->pNext = pNextAttach;
+        } else
+        {
+            g_DelayedAttaches = pNextAttach;
+        }
+        pAttach = pNextAttach;
+        continue;
+    }
+
+    RtlReleaseSRWLockExclusive(&g_DelayedAttachesLock);
+}
+
+NTSTATUS NTAPI SlimDetoursDelayAttach(
+    _In_ PVOID* ppPointer,
+    _In_ PVOID pDetour,
+    _In_ PCWSTR DllName,
+    _In_ PCSTR Function,
+    _In_opt_ __callback DETOUR_DELAY_ATTACH_CALLBACK Callback,
+    _In_opt_ PVOID Context)
+{
+    NTSTATUS Status;
+    UNICODE_STRING DllNameString;
+    PVOID DllBase;
+    PDETOUR_DELAY_ATTACH NewNode;
+
+    detour_init();
+
+    /* Check if Dll is already loaded */
+    RtlInitUnicodeStringEx(&DllNameString, DllName);
+    Status = LdrGetDllHandle(NULL, NULL, &DllNameString, &DllBase);
+    if (NT_SUCCESS(Status))
+    {
+        /* Attach immediately if Dll is loaded */
+        Status = detour_attach_now(ppPointer, pDetour, DllBase, Function);
+        if (Callback != NULL)
+        {
+            Callback(Status, ppPointer, DllName, Function, Context);
+        }
+        return Status;
+    } else if (Status != STATUS_DLL_NOT_FOUND)
+    {
+        return Status;
+    }
+
+    /* Insert into delayed attach list */
+    RtlAcquireSRWLockExclusive(&g_DelayedAttachesLock);
+
+    if (g_DllNotifyCookie == NULL)
+    {
+        Status = LdrRegisterDllNotification(0, detour_dll_notify_proc, NULL, &g_DllNotifyCookie);
+        if (!NT_SUCCESS(Status))
+        {
+            RtlReleaseSRWLockExclusive(&g_DelayedAttachesLock);
+            return Status;
+        }
+    }
+
+    NewNode = detour_memory_alloc(sizeof(*NewNode));
+    if (NewNode == NULL)
+    {
+        RtlReleaseSRWLockExclusive(&g_DelayedAttachesLock);
+        return STATUS_NO_MEMORY;
+    }
+    NewNode->pNext = g_DelayedAttaches;
+    NewNode->usDllName = DllNameString;
+    NewNode->pszFunction = Function;
+    NewNode->ppPointer = ppPointer;
+    NewNode->pDetour = pDetour;
+    NewNode->pfnCallback = Callback;
+    NewNode->Context = Context;
+    g_DelayedAttaches = NewNode;
+
+    RtlReleaseSRWLockExclusive(&g_DelayedAttachesLock);
+
+    return STATUS_PENDING;
 }

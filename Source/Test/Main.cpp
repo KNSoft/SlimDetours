@@ -19,6 +19,7 @@ static UNICODE_STRING g_usUser32 = RTL_CONSTANT_STRING(L"User32.dll");
 static ANSI_STRING g_asMessageBoxW = RTL_CONSTANT_STRING("MessageBoxW");
 static FN_MessageBoxW* g_pfnMessageBoxW = NULL;
 
+static
 int
 WINAPI
 Hooked_MessageBoxW(
@@ -32,13 +33,55 @@ Hooked_MessageBoxW(
     return g_pfnMessageBoxW(hWnd, L"Hooked Text", L"Hooked Caption", uType);
 }
 
+static VOID CALLBACK Delay_attach_proc(
+    _In_ NTSTATUS Status,
+    _In_ PVOID* ppPointer,
+    _In_ PCWSTR DllName,
+    _In_ PCSTR Function,
+    _In_opt_ PVOID Context)
+{
+    if ((ULONG_PTR)Function <= MAXUSHORT)
+    {
+        DbgPrint("Delay attached to %ls!#%lu with result 0x%08lX\n", DllName, (ULONG)(ULONG_PTR)Function, Status);
+    } else
+    {
+        DbgPrint("Delay attached to %ls!%hs with result 0x%08lX\n", DllName, Function, Status);
+    }
+}
+
 int WINAPI wWinMain(
     _In_     HINSTANCE hInstance,
     _In_opt_ HINSTANCE hPrevInstance,
     _In_     LPWSTR    lpCmdLine,
     _In_     int       nShowCmd)
 {
+    NTSTATUS Status;
     PVOID User32Base;
+
+#if 1 // Test delay attach
+    FN_MessageBoxW* pfnMessageBoxW;
+
+    if (!NT_SUCCESS(SlimDetoursDelayAttach((PVOID*)&g_pfnMessageBoxW,
+                                           Hooked_MessageBoxW,
+                                           g_usUser32.Buffer,
+                                           g_asMessageBoxW.Buffer,
+                                           Delay_attach_proc,
+                                           NULL)))
+    {
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    if (!NT_SUCCESS(LdrLoadDll(NULL, NULL, &g_usUser32, &User32Base)) ||
+        !NT_SUCCESS(LdrGetProcedureAddress(User32Base, &g_asMessageBoxW, 0, (PVOID*)&pfnMessageBoxW)))
+    {
+        return STATUS_PROCEDURE_NOT_FOUND;
+    }
+    
+    pfnMessageBoxW(NULL, L"Text", L"Caption", MB_ICONINFORMATION);
+
+    Status = STATUS_SUCCESS;
+    
+#else // Test traditional usage
 
     if (!NT_SUCCESS(LdrLoadDll(NULL, NULL, &g_usUser32, &User32Base)) ||
         !NT_SUCCESS(LdrGetProcedureAddress(User32Base, &g_asMessageBoxW, 0, (PVOID*)&g_pfnMessageBoxW)))
@@ -46,14 +89,21 @@ int WINAPI wWinMain(
         return STATUS_PROCEDURE_NOT_FOUND;
     }
 
-    if (!NT_SUCCESS(SlimDetoursTransactionBegin()) ||
-        !NT_SUCCESS(SlimDetoursAttach((PVOID*)&g_pfnMessageBoxW, Hooked_MessageBoxW)) ||
-        !NT_SUCCESS(SlimDetoursTransactionCommit()))
+    Status = SlimDetoursTransactionBegin();
+    if (!NT_SUCCESS(Status))
     {
-        return STATUS_UNSUCCESSFUL;
+        return Status;
     }
+    Status = SlimDetoursAttach((PVOID*)&g_pfnMessageBoxW, Hooked_MessageBoxW);
+    if (!NT_SUCCESS(Status))
+    {
+        SlimDetoursTransactionAbort();
+        return Status;
+    }
+    Status = SlimDetoursTransactionCommit();
+    
+    MessageBoxW(NULL, L"Text", L"Caption", MB_ICONINFORMATION);
 
-    MessageBoxW(NULL, L"Text", L"Caption", MB_OK);
-
-    return STATUS_SUCCESS;
+#endif
+    return Status;
 }

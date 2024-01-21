@@ -23,6 +23,13 @@
 #define DETOUR_INSTRUCTION_TARGET_NONE ((PVOID)0)
 #define DETOUR_INSTRUCTION_TARGET_DYNAMIC ((PVOID)(LONG_PTR)-1)
 
+typedef VOID(CALLBACK* DETOUR_DELAY_ATTACH_CALLBACK)(
+    _In_ NTSTATUS Status,
+    _In_ PVOID* ppPointer,
+    _In_ PCWSTR DllName,
+    _In_ PCSTR Function,
+    _In_opt_ PVOID Context);
+
 #pragma region APIs
 
 EXTERN_C_START
@@ -33,6 +40,14 @@ NTSTATUS NTAPI SlimDetoursTransactionCommit();
 
 NTSTATUS NTAPI SlimDetoursAttach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour);
 NTSTATUS NTAPI SlimDetoursDetach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour);
+
+NTSTATUS NTAPI SlimDetoursDelayAttach(
+    _In_ PVOID* ppPointer,
+    _In_ PVOID pDetour,
+    _In_ PCWSTR DllName,
+    _In_ PCSTR Function,
+    _In_opt_ __callback DETOUR_DELAY_ATTACH_CALLBACK Callback,
+    _In_opt_ PVOID Context);
 
 PVOID NTAPI SlimDetoursCodeFromPointer(_In_ PVOID pPointer);
 PVOID NTAPI SlimDetoursCopyInstruction(
@@ -71,6 +86,23 @@ template<typename T, typename std::enable_if<SlimDetoursIsFunctionPointer<T>::va
 NTSTATUS SlimDetoursDetach(_Inout_ T* ppPointer, _In_ T pDetour) noexcept
 {
     return SlimDetoursDetach(reinterpret_cast<void**>(ppPointer), reinterpret_cast<void*>(pDetour));
+}
+
+template<typename T, typename std::enable_if<SlimDetoursIsFunctionPointer<T>::value, int>::type = 0>
+NTSTATUS SlimDetoursDelayAttach(
+    _In_ T* ppPointer,
+    _In_ T pDetour,
+    _In_ PCWSTR DllName,
+    _In_ PCSTR Function,
+    _In_opt_ __callback DETOUR_DELAY_ATTACH_CALLBACK Callback,
+    _In_opt_ PVOID Context)
+{
+    return SlimDetoursDelayAttach(reinterpret_cast<void**>(ppPointer),
+                                  reinterpret_cast<void*>(pDetour),
+                                  DllName,
+                                  Function,
+                                  Callback,
+                                  Context);
 }
 
 #endif // __cplusplus >= 201103L || _MSVC_LANG >= 201103L
