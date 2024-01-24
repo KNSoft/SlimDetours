@@ -52,7 +52,6 @@ NTSTATUS NTAPI SlimDetoursDelayAttach(
 PVOID NTAPI SlimDetoursCodeFromPointer(_In_ PVOID pPointer);
 PVOID NTAPI SlimDetoursCopyInstruction(
     _In_opt_ PVOID pDst,
-    _Inout_opt_ PVOID* ppDstPool,
     _In_ PVOID pSrc,
     _Out_opt_ PVOID* ppTarget,
     _Out_opt_ LONG* plExtra);

@@ -1579,21 +1579,6 @@ pp is like VEX but only instructions with 0 are defined
     }
 }
 
-PVOID NTAPI SlimDetoursCopyInstruction(
-    _In_opt_ PVOID pDst,
-    _Inout_opt_ PVOID* ppDstPool,
-    _In_ PVOID pSrc,
-    _Out_opt_ PVOID* ppTarget,
-    _Out_opt_ LONG* plExtra)
-{
-    UNREFERENCED_PARAMETER(ppDstPool);  // x86 & x64 don't use a constant pool.
-
-    DETOUR_DISASM Disasm;
-
-    detour_disasm_init(&Disasm, (PBYTE*)ppTarget, plExtra);
-    return CopyInstruction(&Disasm, (PBYTE)pDst, (PBYTE)pSrc);
-}
-
 #endif // defined(_M_X64) || defined(_M_IX86)
 
 #if defined(_M_ARM64)
@@ -2324,23 +2309,27 @@ static PBYTE CopyInstruction(_In_ PDETOUR_DISASM pDisasm, _In_opt_ PBYTE pDst, _
     return pSrc + 4;
 }
 
+#endif // defined(_M_ARM64)
+
 PVOID NTAPI SlimDetoursCopyInstruction(
     _In_opt_ PVOID pDst,
-    _Inout_opt_ PVOID* ppDstPool,
     _In_ PVOID pSrc,
     _Out_opt_ PVOID* ppTarget,
     _Out_opt_ LONG* plExtra)
 {
-    UNREFERENCED_PARAMETER(ppDstPool);
-
     DETOUR_DISASM Disasm;
 
+#if defined(_M_X64) || defined(_M_IX86)
+    detour_disasm_init(&Disasm, (PBYTE*)ppTarget, plExtra);
+    return (PVOID)CopyInstruction(&Disasm, (PBYTE)pDst, (PBYTE)pSrc);
+#elif defined(_M_ARM64)
     detour_disasm_init(&Disasm);
     return (PVOID)CopyInstruction(&Disasm,
                                   (PBYTE)pDst,
                                   (PBYTE)pSrc,
                                   (PBYTE*)ppTarget,
                                   plExtra);
+#else
+    return NULL;
+#endif
 }
-
-#endif // defined(_M_ARM64)

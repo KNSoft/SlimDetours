@@ -79,13 +79,16 @@ VOID detour_memory_init()
     }
 #endif
 
-    g_hHeap = RtlCreateHeap(HEAP_NO_SERIALIZE | HEAP_GROWABLE, NULL, 0, 0, NULL, NULL);
+    if (g_hHeap == NULL)
+    {
+        g_hHeap = RtlCreateHeap(HEAP_NO_SERIALIZE | HEAP_GROWABLE, NULL, 0, 0, NULL, NULL);
+    }
 }
 
 _Must_inspect_result_
 _Ret_maybenull_
 _Post_writable_byte_size_(Size)
-PVOID detour_memory_alloc(_In_range_(>, 0) SIZE_T Size)
+PVOID detour_memory_alloc(_In_ SIZE_T Size)
 {
     if (g_hHeap == NULL)
     {

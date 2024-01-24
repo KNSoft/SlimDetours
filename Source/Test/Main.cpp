@@ -49,11 +49,7 @@ static VOID CALLBACK Delay_attach_proc(
     }
 }
 
-int WINAPI wWinMain(
-    _In_     HINSTANCE hInstance,
-    _In_opt_ HINSTANCE hPrevInstance,
-    _In_     LPWSTR    lpCmdLine,
-    _In_     int       nShowCmd)
+int wmain()
 {
     NTSTATUS Status;
     PVOID User32Base;
@@ -61,14 +57,15 @@ int WINAPI wWinMain(
 #if 1 // Test delay attach
     FN_MessageBoxW* pfnMessageBoxW;
 
-    if (!NT_SUCCESS(SlimDetoursDelayAttach((PVOID*)&g_pfnMessageBoxW,
-                                           Hooked_MessageBoxW,
-                                           g_usUser32.Buffer,
-                                           g_asMessageBoxW.Buffer,
-                                           Delay_attach_proc,
-                                           NULL)))
+    Status = SlimDetoursDelayAttach((PVOID*)&g_pfnMessageBoxW,
+                                    Hooked_MessageBoxW,
+                                    g_usUser32.Buffer,
+                                    g_asMessageBoxW.Buffer,
+                                    Delay_attach_proc,
+                                    NULL);
+    if (!NT_SUCCESS(Status))
     {
-        return STATUS_UNSUCCESSFUL;
+        return Status;
     }
 
     if (!NT_SUCCESS(LdrLoadDll(NULL, NULL, &g_usUser32, &User32Base)) ||

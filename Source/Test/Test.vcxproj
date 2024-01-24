@@ -119,7 +119,7 @@
       <OmitDefaultLibName>true</OmitDefaultLibName>
     </ClCompile>
     <Link>
-      <SubSystem>Windows</SubSystem>
+      <SubSystem>Console</SubSystem>
     </Link>
     <ProjectReference />
   </ItemDefinitionGroup>
@@ -130,7 +130,7 @@
       <OmitDefaultLibName>true</OmitDefaultLibName>
     </ClCompile>
     <Link>
-      <SubSystem>Windows</SubSystem>
+      <SubSystem>Console</SubSystem>
     </Link>
     <ProjectReference />
   </ItemDefinitionGroup>
@@ -143,7 +143,7 @@
       <OmitDefaultLibName>true</OmitDefaultLibName>
     </ClCompile>
     <Link>
-      <SubSystem>Windows</SubSystem>
+      <SubSystem>Console</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
     </Link>
@@ -158,7 +158,7 @@
       <OmitDefaultLibName>true</OmitDefaultLibName>
     </ClCompile>
     <Link>
-      <SubSystem>Windows</SubSystem>
+      <SubSystem>Console</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
     </Link>
@@ -171,7 +171,7 @@
       <OmitDefaultLibName>true</OmitDefaultLibName>
     </ClCompile>
     <Link>
-      <SubSystem>Windows</SubSystem>
+      <SubSystem>Console</SubSystem>
     </Link>
     <ProjectReference />
   </ItemDefinitionGroup>
@@ -184,7 +184,7 @@
       <OmitDefaultLibName>true</OmitDefaultLibName>
     </ClCompile>
     <Link>
-      <SubSystem>Windows</SubSystem>
+      <SubSystem>Console</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
     </Link>

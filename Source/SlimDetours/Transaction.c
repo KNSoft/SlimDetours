@@ -323,7 +323,7 @@ fail:
         LONG lExtra = 0;
 
         DETOUR_TRACE(" SlimDetoursCopyInstruction(%p,%p)\n", pbTrampoline, pbSrc);
-        pbSrc = (PBYTE)SlimDetoursCopyInstruction(pbTrampoline, (PVOID*)&pbPool, pbSrc, NULL, &lExtra);
+        pbSrc = (PBYTE)SlimDetoursCopyInstruction(pbTrampoline, pbSrc, NULL, &lExtra);
         DETOUR_TRACE(" SlimDetoursCopyInstruction() = %p (%d bytes)\n", pbSrc, (int)(pbSrc - pbOp));
         pbTrampoline += (pbSrc - pbOp) + lExtra;
         cbTarget = PtrOffset(pbTarget, pbSrc);
@@ -588,7 +588,7 @@ static VOID CALLBACK detour_dll_notify_proc(
     while (pAttach != NULL)
     {
         /* Match Dll name */
-        if (RtlCompareUnicodeString(&pAttach->usDllName, NotificationData->Loaded.BaseDllName, FALSE) != 0)
+        if (!RtlEqualUnicodeString(&pAttach->usDllName, NotificationData->Loaded.BaseDllName, FALSE))
         {
             pPrevAttach = pAttach;
             pAttach = pAttach->pNext;
@@ -620,7 +620,6 @@ static VOID CALLBACK detour_dll_notify_proc(
             g_DelayedAttaches = pNextAttach;
         }
         pAttach = pNextAttach;
-        continue;
     }
 
     RtlReleaseSRWLockExclusive(&g_DelayedAttachesLock);

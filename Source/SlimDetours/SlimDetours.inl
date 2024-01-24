@@ -124,7 +124,7 @@ VOID detour_memory_init();
 _Must_inspect_result_
 _Ret_maybenull_
 _Post_writable_byte_size_(Size)
-PVOID detour_memory_alloc(_In_range_(> , 0) SIZE_T Size);
+PVOID detour_memory_alloc(_In_ SIZE_T Size);
 
 BOOL detour_memory_free(_Frees_ptr_ PVOID BaseAddress);
 

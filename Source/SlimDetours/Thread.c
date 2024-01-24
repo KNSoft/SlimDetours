@@ -139,7 +139,6 @@ NTSTATUS detour_thread_update(_In_ HANDLE ThreadHandle, _In_ PDETOUR_OPERATION P
             if (cxt.CONTEXT_PC >= (ULONG_PTR)o->pTrampoline &&
                 cxt.CONTEXT_PC < ((ULONG_PTR)o->pTrampoline + sizeof(o->pTrampoline)))
             {
-
                 cxt.CONTEXT_PC = (ULONG_PTR)o->pbTarget +
                     detour_align_from_trampoline(o->pTrampoline, (BYTE)(cxt.CONTEXT_PC - (ULONG_PTR)o->pTrampoline));
                 bUpdateContext = TRUE;
@@ -149,7 +148,6 @@ NTSTATUS detour_thread_update(_In_ HANDLE ThreadHandle, _In_ PDETOUR_OPERATION P
             if (cxt.CONTEXT_PC >= (ULONG_PTR)o->pbTarget &&
                 cxt.CONTEXT_PC < ((ULONG_PTR)o->pbTarget + o->pTrampoline->cbRestore))
             {
-
                 cxt.CONTEXT_PC = (ULONG_PTR)o->pTrampoline +
                     detour_align_from_target(o->pTrampoline, (BYTE)(cxt.CONTEXT_PC - (ULONG_PTR)o->pbTarget));
                 bUpdateContext = TRUE;
