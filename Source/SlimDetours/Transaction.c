@@ -12,7 +12,7 @@
 
 #include "SlimDetours.inl"
 
-#pragma comment(lib, "WIE_WinAPI.lib")
+#pragma comment(lib, "KNSoft.NDK.WinAPI.lib")
 
 typedef struct _DETOUR_DELAY_ATTACH DETOUR_DELAY_ATTACH, *PDETOUR_DELAY_ATTACH;
 typedef VOID(CALLBACK* DETOUR_DELAY_ATTACH_CALLBACK)(
@@ -46,7 +46,7 @@ NTSTATUS NTAPI SlimDetoursTransactionBegin()
     NTSTATUS Status;
 
     // Make sure only one thread can start a transaction.
-    if (_InterlockedCompareExchangePointer(&s_nPendingThreadId, CURRENT_THREAD_ID, 0) != 0)
+    if (_InterlockedCompareExchangePointer(&s_nPendingThreadId, NtGetCurrentThreadId(), 0) != 0)
     {
         return STATUS_TRANSACTIONAL_CONFLICT;
     }
@@ -83,7 +83,7 @@ NTSTATUS NTAPI SlimDetoursTransactionAbort()
     SIZE_T sMem;
     DWORD dwOld;
 
-    if (s_nPendingThreadId != CURRENT_THREAD_ID)
+    if (s_nPendingThreadId != NtGetCurrentThreadId())
     {
         return STATUS_TRANSACTIONAL_CONFLICT;
     }
@@ -134,7 +134,7 @@ NTSTATUS NTAPI SlimDetoursTransactionCommit()
     BOOL freed = FALSE;
     ULONG i;
 
-    if (s_nPendingThreadId != CURRENT_THREAD_ID)
+    if (s_nPendingThreadId != NtGetCurrentThreadId())
     {
         return STATUS_TRANSACTIONAL_CONFLICT;
     }
@@ -259,7 +259,7 @@ NTSTATUS NTAPI SlimDetoursAttach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour)
     SIZE_T sMem;
     DWORD dwOld;
 
-    if (s_nPendingThreadId != CURRENT_THREAD_ID)
+    if (s_nPendingThreadId != NtGetCurrentThreadId())
     {
         return STATUS_TRANSACTIONAL_CONFLICT;
     }
@@ -458,7 +458,7 @@ NTSTATUS NTAPI SlimDetoursDetach(_Inout_ PVOID* ppPointer, _In_ PVOID pDetour)
     SIZE_T sMem;
     DWORD dwOld;
 
-    if (s_nPendingThreadId != CURRENT_THREAD_ID)
+    if (s_nPendingThreadId != NtGetCurrentThreadId())
     {
         return STATUS_TRANSACTIONAL_CONFLICT;
     }

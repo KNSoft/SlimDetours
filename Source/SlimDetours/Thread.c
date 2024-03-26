@@ -22,7 +22,7 @@ NTSTATUS detour_thread_suspend(
 
     i = MB_TO_BYTES(1);
 _try_alloc:
-    pSPI = (PSYSTEM_PROCESS_INFORMATION)RtlAllocateHeap(CURRENT_PROCESS_HEAP, 0, i);
+    pSPI = (PSYSTEM_PROCESS_INFORMATION)RtlAllocateHeap(NtGetProcessHeap(), 0, i);
     if (pSPI == NULL)
     {
         return STATUS_NO_MEMORY;
@@ -30,7 +30,7 @@ _try_alloc:
     Status = NtQuerySystemInformation(SystemProcessInformation, pSPI, i, &i);
     if (!NT_SUCCESS(Status))
     {
-        RtlFreeHeap(CURRENT_PROCESS_HEAP, 0, pSPI);
+        RtlFreeHeap(NtGetProcessHeap(), 0, pSPI);
         if (Status == STATUS_INFO_LENGTH_MISMATCH)
         {
             goto _try_alloc;
@@ -40,14 +40,14 @@ _try_alloc:
 
     /* Find current process and threads */
 
-    CurrentPID = (HANDLE)WIE_ReadTEB(ClientId.UniqueProcess);
+    CurrentPID = (HANDLE)ReadTeb(ClientId.UniqueProcess);
     pCurrentSPI = pSPI;
 _next_proc:
     if (pCurrentSPI->UniqueProcessId != CurrentPID)
     {
         if (pCurrentSPI->NextEntryOffset == 0)
         {
-            RtlFreeHeap(CURRENT_PROCESS_HEAP, 0, pSPI);
+            RtlFreeHeap(NtGetProcessHeap(), 0, pSPI);
             return STATUS_NOT_FOUND;
         } else
         {
@@ -59,16 +59,16 @@ _next_proc:
 
     /* Suspend threads and create handle array */
 
-    Buffer = (PHANDLE)RtlAllocateHeap(CURRENT_PROCESS_HEAP, 0, pCurrentSPI->NumberOfThreads * sizeof(HANDLE));
+    Buffer = (PHANDLE)RtlAllocateHeap(NtGetProcessHeap(), 0, pCurrentSPI->NumberOfThreads * sizeof(HANDLE));
     if (Buffer == NULL)
     {
-        RtlFreeHeap(CURRENT_PROCESS_HEAP, 0, pSPI);
+        RtlFreeHeap(NtGetProcessHeap(), 0, pSPI);
         return STATUS_NO_MEMORY;
     }
 
     InitializeObjectAttributes(&ObjectAttributes, NULL, 0, NULL, NULL);
     SuspendedCount = 0;
-    CurrentTID = (HANDLE)WIE_ReadTEB(ClientId.UniqueThread);
+    CurrentTID = (HANDLE)ReadTeb(ClientId.UniqueThread);
     for (i = 0; i < pCurrentSPI->NumberOfThreads; i++)
     {
         if (pSTI[i].ClientId.UniqueThread == CurrentTID ||
@@ -87,7 +87,7 @@ _next_proc:
             NtClose(ThreadHandle);
         }
     }
-    RtlFreeHeap(CURRENT_PROCESS_HEAP, 0, pSPI);
+    RtlFreeHeap(NtGetProcessHeap(), 0, pSPI);
 
     /* Return suspended thread handles */
 
@@ -97,7 +97,7 @@ _next_proc:
         *SuspendedHandles = Buffer;
     } else
     {
-        RtlFreeHeap(CURRENT_PROCESS_HEAP, 0, Buffer);
+        RtlFreeHeap(NtGetProcessHeap(), 0, Buffer);
         *SuspendedHandles = NULL;
     }
     return STATUS_SUCCESS;
@@ -114,7 +114,7 @@ VOID detour_thread_resume(
         NtResumeThread(SuspendedHandles[i], NULL);
         NtClose(SuspendedHandles[i]);
     }
-    RtlFreeHeap(CURRENT_PROCESS_HEAP, 0, SuspendedHandles);
+    RtlFreeHeap(NtGetProcessHeap(), 0, SuspendedHandles);
 }
 
 NTSTATUS detour_thread_update(_In_ HANDLE ThreadHandle, _In_ PDETOUR_OPERATION PendingOperations)

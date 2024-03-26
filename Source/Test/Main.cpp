@@ -1,6 +1,4 @@
-﻿#include <Wintexports/Wintexports.h>
-
-#pragma comment(lib, "ntdll.lib")
+﻿#include <KNSoft/NDK/NDK.h>
 
 #include "../SlimDetours/SlimDetours.h"
 

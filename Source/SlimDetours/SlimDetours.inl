@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-#include <Wintexports/Wintexports.h>
+#include <KNSoft/NDK/NDK.h>
 
 #include <limits.h>
 

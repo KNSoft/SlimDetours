@@ -36,7 +36,7 @@ static HANDLE g_hHeap = NULL;
  * and [0x00007FF7FFFF0000 ... 0x00007FFFFFFF0000] (32GB) on 64-bit Windows, which is too large to avoid.
  * In this case, avoiding 1GB range starting at Ntdll.dll is make sense.
  *
- * Use MI_ASLR_* provided by Wintexports instead of hard-coded.
+ * Use MI_ASLR_* provided by KNSoft.NDK instead of hard-coded.
  */
 
 #define SYSTEM_RESERVED_REGION_HIGHEST ((ULONG_PTR)MI_ASLR_HIGHEST_SYSTEM_RANGE_ADDRESS - 1)
@@ -92,7 +92,7 @@ PVOID detour_memory_alloc(_In_ SIZE_T Size)
 {
     if (g_hHeap == NULL)
     {
-        g_hHeap = CURRENT_PROCESS_HEAP;
+        g_hHeap = NtGetProcessHeap();
     }
     return RtlAllocateHeap(g_hHeap, 0, Size);
 }
