@@ -29,7 +29,7 @@
   <ItemGroup>
     <ClCompile Include="Instruction.c" />
     <ClCompile Include="Memory.c" />
-    <ClCompile Include="SlimDetours.c" />
+    <ClCompile Include="SlimDetours.cpp" />
     <ClCompile Include="Disasm.c" />
     <ClCompile Include="Thread.c" />
     <ClCompile Include="Trampoline.c" />

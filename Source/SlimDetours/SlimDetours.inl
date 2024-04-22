@@ -2,12 +2,6 @@
 
 #include <KNSoft/NDK/NDK.h>
 
-#include <limits.h>
-
-#ifdef __cplusplus
-#include <new>
-#endif
-
 #include "SlimDetours.h"
 
 #if _DEBUG
@@ -23,8 +17,6 @@
 #define _2GB GB_TO_BYTES((ULONG_PTR)2)
 
 EXTERN_C_START
-
-VOID detour_init();
 
 /* Basic structures */
 

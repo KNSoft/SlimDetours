@@ -51,8 +51,6 @@ NTSTATUS NTAPI SlimDetoursTransactionBegin()
         return STATUS_TRANSACTIONAL_CONFLICT;
     }
 
-    detour_init();
-
     // Make sure the trampoline pages are writable.
     Status = detour_writable_trampoline_regions();
     if (!NT_SUCCESS(Status))
@@ -637,8 +635,6 @@ NTSTATUS NTAPI SlimDetoursDelayAttach(
     UNICODE_STRING DllNameString;
     PVOID DllBase;
     PDETOUR_DELAY_ATTACH NewNode;
-
-    detour_init();
 
     /* Check if Dll is already loaded */
     RtlInitUnicodeStringEx(&DllNameString, DllName);

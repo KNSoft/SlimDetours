@@ -16,12 +16,12 @@ typedef struct _DETOUR_REGION DETOUR_REGION, *PDETOUR_REGION;
 
 struct _DETOUR_REGION
 {
-    ULONG dwSignature;
+    ULONGLONG ullSignature;
     PDETOUR_REGION pNext;       // Next region in list of regions.
     PDETOUR_TRAMPOLINE pFree;   // List of free trampolines in this region.
 };
 
-#define DETOUR_REGION_SIGNATURE 'RDlS'
+#define DETOUR_REGION_SIGNATURE ((ULONGLONG)'lSNK' << 32 | 'srtD')
 #define DETOUR_REGION_SIZE 0x10000UL
 #define DETOUR_TRAMPOLINES_PER_REGION ((DETOUR_REGION_SIZE / sizeof(DETOUR_TRAMPOLINE)) - 1)
 static PDETOUR_REGION s_pRegions = NULL; // List of all regions.
@@ -314,7 +314,7 @@ found_region:
     if (pbNewlyAllocated != NULL)
     {
         s_pRegion = (DETOUR_REGION*)pbNewlyAllocated;
-        s_pRegion->dwSignature = DETOUR_REGION_SIGNATURE;
+        s_pRegion->ullSignature = DETOUR_REGION_SIGNATURE;
         s_pRegion->pFree = NULL;
         s_pRegion->pNext = s_pRegions;
         s_pRegions = s_pRegion;
@@ -348,7 +348,7 @@ VOID detour_free_trampoline(_In_ PDETOUR_TRAMPOLINE pTrampoline)
 static BOOL detour_is_region_empty(PDETOUR_REGION pRegion)
 {
     // Stop if the region isn't a region (this would be bad).
-    if (pRegion->dwSignature != DETOUR_REGION_SIGNATURE)
+    if (pRegion->ullSignature != DETOUR_REGION_SIGNATURE)
     {
         return FALSE;
     }

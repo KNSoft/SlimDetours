@@ -606,3 +606,8 @@ ULONG detour_is_code_filler(_In_ PBYTE pbCode)
 }
 
 #endif // defined(_M_ARM64)
+
+PVOID NTAPI SlimDetoursCodeFromPointer(_In_ PVOID pPointer)
+{
+    return detour_skip_jmp((PBYTE)pPointer);
+}

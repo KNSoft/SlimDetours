@@ -22,7 +22,7 @@ NTSTATUS detour_thread_suspend(
 
     i = MB_TO_BYTES(1);
 _try_alloc:
-    pSPI = (PSYSTEM_PROCESS_INFORMATION)RtlAllocateHeap(NtGetProcessHeap(), 0, i);
+    pSPI = (PSYSTEM_PROCESS_INFORMATION)detour_memory_alloc(i);
     if (pSPI == NULL)
     {
         return STATUS_NO_MEMORY;
@@ -30,7 +30,7 @@ _try_alloc:
     Status = NtQuerySystemInformation(SystemProcessInformation, pSPI, i, &i);
     if (!NT_SUCCESS(Status))
     {
-        RtlFreeHeap(NtGetProcessHeap(), 0, pSPI);
+        detour_memory_free(pSPI);
         if (Status == STATUS_INFO_LENGTH_MISMATCH)
         {
             goto _try_alloc;
@@ -47,7 +47,7 @@ _next_proc:
     {
         if (pCurrentSPI->NextEntryOffset == 0)
         {
-            RtlFreeHeap(NtGetProcessHeap(), 0, pSPI);
+            detour_memory_free(pSPI);
             return STATUS_NOT_FOUND;
         } else
         {
@@ -59,10 +59,10 @@ _next_proc:
 
     /* Suspend threads and create handle array */
 
-    Buffer = (PHANDLE)RtlAllocateHeap(NtGetProcessHeap(), 0, pCurrentSPI->NumberOfThreads * sizeof(HANDLE));
+    Buffer = (PHANDLE)detour_memory_alloc(pCurrentSPI->NumberOfThreads * sizeof(HANDLE));
     if (Buffer == NULL)
     {
-        RtlFreeHeap(NtGetProcessHeap(), 0, pSPI);
+        detour_memory_free(pSPI);
         return STATUS_NO_MEMORY;
     }
 
@@ -87,7 +87,7 @@ _next_proc:
             NtClose(ThreadHandle);
         }
     }
-    RtlFreeHeap(NtGetProcessHeap(), 0, pSPI);
+    detour_memory_free(pSPI);
 
     /* Return suspended thread handles */
 
@@ -97,7 +97,7 @@ _next_proc:
         *SuspendedHandles = Buffer;
     } else
     {
-        RtlFreeHeap(NtGetProcessHeap(), 0, Buffer);
+        detour_memory_free(Buffer);
         *SuspendedHandles = NULL;
     }
     return STATUS_SUCCESS;
@@ -114,7 +114,7 @@ VOID detour_thread_resume(
         NtResumeThread(SuspendedHandles[i], NULL);
         NtClose(SuspendedHandles[i]);
     }
-    RtlFreeHeap(NtGetProcessHeap(), 0, SuspendedHandles);
+    detour_memory_free(SuspendedHandles);
 }
 
 NTSTATUS detour_thread_update(_In_ HANDLE ThreadHandle, _In_ PDETOUR_OPERATION PendingOperations)

@@ -18,6 +18,8 @@
 
 #include <Windows.h>
 
+EXTERN_C_START
+
 /* Instruction Target Macros */
 
 #define DETOUR_INSTRUCTION_TARGET_NONE ((PVOID)0)
@@ -31,8 +33,6 @@ typedef VOID(CALLBACK* DETOUR_DELAY_ATTACH_CALLBACK)(
     _In_opt_ PVOID Context);
 
 #pragma region APIs
-
-EXTERN_C_START
 
 NTSTATUS NTAPI SlimDetoursTransactionBegin();
 NTSTATUS NTAPI SlimDetoursTransactionAbort();
