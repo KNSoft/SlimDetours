@@ -21,3 +21,5 @@ Compared to original [Detours](https://github.com/microsoft/Detours), SlimDetour
 SlimDetours is based on [Microsoft Detours](https://github.com/microsoft/Detours) which is licensed under the [MIT](https://github.com/microsoft/Detours/blob/main/LICENSE) license.
 
 SlimDetours is licensed under the [MPL-2.0](LICENSE.md) license.
+
+SlimDetours also uses [KNSoft/NDK](https://github.com/KNSoft/KNSoft.NDK) to access low-level Windows NT APIs.
