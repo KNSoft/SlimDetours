@@ -12,7 +12,14 @@
 
 #include "SlimDetours.inl"
 
-#pragma comment(lib, "KNSoft.NDK.WinAPI.lib")
+typedef
+NTSTATUS
+NTAPI
+FN_LdrRegisterDllNotification(
+    _In_ ULONG Flags,
+    _In_ PLDR_DLL_NOTIFICATION_FUNCTION NotificationFunction,
+    _In_opt_ PVOID Context,
+    _Out_ PVOID* Cookie);
 
 typedef struct _DETOUR_DELAY_ATTACH DETOUR_DELAY_ATTACH, *PDETOUR_DELAY_ATTACH;
 typedef VOID(CALLBACK* DETOUR_DELAY_ATTACH_CALLBACK)(
@@ -33,6 +40,8 @@ struct _DETOUR_DELAY_ATTACH
     PVOID Context;
 };
 
+static const ANSI_STRING g_asLdrRegisterDllNotification = RTL_CONSTANT_STRING("LdrRegisterDllNotification");
+static FN_LdrRegisterDllNotification* g_pfnLdrRegisterDllNotification = NULL;
 static HANDLE s_nPendingThreadId = 0; // Thread owning pending transaction.
 static PHANDLE s_phSuspendedThreads = NULL;
 static ULONG s_ulSuspendedThreadCount = 0;
@@ -40,6 +49,22 @@ static PDETOUR_OPERATION s_pPendingOperations = NULL;
 static RTL_SRWLOCK g_DelayedAttachesLock = RTL_SRWLOCK_INIT;
 static PVOID g_DllNotifyCookie = NULL;
 static PDETOUR_DELAY_ATTACH g_DelayedAttaches = NULL;
+
+MSVC_INITIALIZER(detour_transaction_init)
+{
+    NTSTATUS Status;
+
+    Status = LdrGetProcedureAddress(NtGetNtdllBase(),
+                                    (PANSI_STRING)&g_asLdrRegisterDllNotification,
+                                    0,
+                                    (PVOID*)&g_pfnLdrRegisterDllNotification);
+    if (!NT_SUCCESS(Status))
+    {
+        DETOUR_TRACE("LdrGetProcedureAddress failed to get LdrRegisterDllNotification with 0x%08lX\n", Status);
+        return Status;
+    }
+    return 0;
+}
 
 NTSTATUS NTAPI SlimDetoursTransactionBegin()
 {
@@ -658,7 +683,7 @@ NTSTATUS NTAPI SlimDetoursDelayAttach(
 
     if (g_DllNotifyCookie == NULL)
     {
-        Status = LdrRegisterDllNotification(0, detour_dll_notify_proc, NULL, &g_DllNotifyCookie);
+        Status = g_pfnLdrRegisterDllNotification(0, detour_dll_notify_proc, NULL, &g_DllNotifyCookie);
         if (!NT_SUCCESS(Status))
         {
             RtlReleaseSRWLockExclusive(&g_DelayedAttachesLock);

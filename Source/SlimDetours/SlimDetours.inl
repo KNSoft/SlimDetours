@@ -111,8 +111,6 @@ struct _DETOUR_OPERATION
 
 /* Memory management */
 
-VOID detour_memory_init();
-
 _Must_inspect_result_
 _Ret_maybenull_
 _Post_writable_byte_size_(Size)

@@ -60,10 +60,10 @@ static ULONG_PTR s_ulSystemRegionLowUpperBound = SYSTEM_RESERVED_REGION_HIGHEST;
 static ULONG_PTR s_ulSystemRegionLowLowerBound = SYSTEM_RESERVED_REGION_LOWEST;
 #endif
 
-VOID detour_memory_init()
+MSVC_INITIALIZER(detour_memory_init)
 {
+    /* Initialize memory management information */
     NtQuerySystemInformation(SystemBasicInformation, &g_sbi, sizeof(g_sbi), NULL);
-
 #if defined(_WIN64)
     PLDR_DATA_TABLE_ENTRY NtdllLdrEntry;
 
@@ -79,10 +79,15 @@ VOID detour_memory_init()
     }
 #endif
 
+    /* Initialize private heap */
+    g_hHeap = RtlCreateHeap(HEAP_NO_SERIALIZE | HEAP_GROWABLE, NULL, 0, 0, NULL, NULL);
     if (g_hHeap == NULL)
     {
-        g_hHeap = RtlCreateHeap(HEAP_NO_SERIALIZE | HEAP_GROWABLE, NULL, 0, 0, NULL, NULL);
+        DETOUR_TRACE("RtlCreateHeap failed, fallback to process default heap\n");
+        g_hHeap = NtGetProcessHeap();
     }
+
+    return 0;
 }
 
 _Must_inspect_result_
@@ -90,10 +95,6 @@ _Ret_maybenull_
 _Post_writable_byte_size_(Size)
 PVOID detour_memory_alloc(_In_ SIZE_T Size)
 {
-    if (g_hHeap == NULL)
-    {
-        g_hHeap = NtGetProcessHeap();
-    }
     return RtlAllocateHeap(g_hHeap, 0, Size);
 }
 
